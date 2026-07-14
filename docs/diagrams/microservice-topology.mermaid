@@ -1,0 +1,59 @@
+flowchart TB
+    subgraph EXT["Dış Sistemler"]
+        DEV["Ağ Cihazları\n(Cisco/Fortinet/Aruba/Huawei/\nMikroTik/OpenWrt…)\nSSH · SNMP · SFTP"]
+        LDAP["LDAP / Active Directory"]
+        VAULT["HashiCorp Vault\n(secret backend)"]
+        OLLAMA["Ollama\n(yerel LLM)"]
+        NVD["NVD / NIST\n(CVE feed)"]
+        CHAT["Slack / Teams / Syslog"]
+    end
+
+    subgraph EDGE["Kenar / Sunum"]
+        CADDY["Caddy\nTLS terminasyonu (HTTPS)"]
+        DASH["nabs-dashboard\nnginx + React SPA"]
+    end
+
+    subgraph APP["Uygulama Katmanı"]
+        API["nabs-core-api\nFastAPI (JWT/RBAC, REST)"]
+        WORKER["celery-worker-high\nasenkron görevler"]
+        BEAT["celery-beat\nzamanlanmış görevler"]
+    end
+
+    subgraph DATA["Durum / Veri"]
+        PG[("PostgreSQL 16\n+ pgvector")]
+        REDIS[("Redis\nbroker/kuyruk")]
+        GIT[["Git Repo Volume\nconfig sürüm geçmişi"]]
+        SFTP["SFTPGo\npasif yedek girişi"]
+    end
+
+    subgraph OBS["Observability (opsiyonel)"]
+        PROM["Prometheus"]
+        GRAF["Grafana"]
+    end
+
+    USER(["Kullanıcı\n(Ağ Admini)"]) -->|HTTPS| CADDY
+    CADDY -->|/| DASH
+    CADDY -->|/api| API
+    DASH -->|/api proxy| API
+
+    API --> PG
+    API --> REDIS
+    API --> GIT
+    API -. secret .-> VAULT
+    API -. kimlik .-> LDAP
+    API -. AI .-> OLLAMA
+
+    WORKER --> PG
+    WORKER --> GIT
+    WORKER -->|SSH/SNMP| DEV
+    WORKER -. CVE .-> NVD
+    WORKER -. bildirim .-> CHAT
+    WORKER --> REDIS
+    BEAT --> REDIS
+
+    DEV -->|SFTP push| SFTP
+    SFTP -->|webhook HMAC| API
+
+    API -->|/metrics| PROM
+    WORKER -. exporter .-> PROM
+    PROM --> GRAF

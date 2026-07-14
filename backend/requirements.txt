@@ -1,0 +1,24 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+celery>=5.3
+redis>=5.0
+httpx>=0.27
+python-jose[cryptography]>=3.3
+bcrypt>=4.0
+cryptography>=42.0
+GitPython>=3.1
+ciscoconfparse2>=0.7 ; python_version >= "3.11"
+scrapli>=2024.1.30
+scrapli-community>=2024.1.30 ; python_version >= "3.11"
+paramiko>=3.3
+python-multipart>=0.0.9
+pyyaml>=6.0
+reportlab>=4.0
+pyotp>=2.9
+prometheus-fastapi-instrumentator>=7.0
+ldap3>=2.9 ; python_version >= "3.11"
+pysnmp>=4.4 ; python_version >= "3.11"
+hvac>=2.0 ; python_version >= "3.11"

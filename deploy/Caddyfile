@@ -1,0 +1,21 @@
+# Caddy ile otomatik HTTPS (Let's Encrypt) TLS terminasyonu.
+# {$NABS_DOMAIN} env'den gelir (ör. nabs.sirket.local ya da gerçek FQDN).
+# Gerçek sertifika için herkese açık bir FQDN + 80/443 erişimi gerekir;
+# iç ağ için 'tls internal' satırını açıp self-signed kullanın.
+
+{$NABS_DOMAIN} {
+    # İç ağ / FQDN yoksa self-signed sertifika:
+    # tls internal
+
+    encode gzip
+
+    # API isteklerini backend'e
+    handle /api/* {
+        reverse_proxy nabs-core-api:8000
+    }
+
+    # Diğer her şey dashboard'a (SPA)
+    handle {
+        reverse_proxy nabs-dashboard:80
+    }
+}

@@ -1,0 +1,14 @@
+# NABS-GP — ağ cihazlarına SSH için uyumluluk odaklı yapılandırma.
+# Eski Huawei/Fortinet/Cisco cihazları modern OpenSSH'in varsayılan olarak
+# devre dışı bıraktığı legacy KEX/host-key/cipher algoritmalarını kullanır;
+# bunlara izin verilir. (Yönetim ağı içi; cihaz kimliği kimlik bilgisiyle sağlanır.)
+Host *
+    KexAlgorithms +diffie-hellman-group1-sha1,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1,diffie-hellman-group-exchange-sha256
+    HostKeyAlgorithms +ssh-rsa,ssh-dss
+    PubkeyAcceptedAlgorithms +ssh-rsa
+    PubkeyAcceptedKeyTypes +ssh-rsa
+    Ciphers +aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc
+    MACs +hmac-sha1,hmac-sha1-96
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    ConnectTimeout 30

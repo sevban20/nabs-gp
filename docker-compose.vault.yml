@@ -1,0 +1,39 @@
+# Opsiyonel: gömülü HashiCorp Vault (kendi Vault'u olmayan kurumlar için).
+# Kalıcı depolamalı, üretim-yetkin tek düğüm. Kullanmadan önce PRODUCTION_INSTALL
+# Bölüm "Opsiyonel: gömülü Vault"u okuyun — Vault init + unseal gerektirir.
+#
+# Kullanım:
+#   docker compose -f docker-compose.yml -f docker-compose.vault.yml up -d nabs-vault
+#   ./scripts/vault_init.sh          # ilk kurulum: init + unseal + secret yazma
+#   # .env'de VAULT_ADDR/VAULT_TOKEN'ı ayarlayıp tüm stack'i başlatın:
+#   docker compose -f docker-compose.yml -f docker-compose.vault.yml up -d
+services:
+  nabs-vault:
+    image: hashicorp/vault:1.17
+    container_name: nabs-vault
+    command: server -config=/vault/config/config.hcl
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+    volumes:
+      - vault_data:/vault/data
+      - ./deploy/vault/config.hcl:/vault/config/config.hcl:ro
+    ports:
+      - "8200:8200"
+    restart: unless-stopped
+    healthcheck:
+      # 501 = initialize edilmemiş, 503 = sealed; ikisi de "ayakta" sayılır
+      test: ["CMD", "sh", "-c", "vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1 || [ $? -eq 2 ] || [ $? -eq 1 ]"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # API ve worker'lar Vault'a bağlanabilsin (aynı ağ). VAULT_* .env'den okunur.
+  nabs-core-api:
+    depends_on:
+      nabs-vault:
+        condition: service_started
+
+volumes:
+  vault_data:

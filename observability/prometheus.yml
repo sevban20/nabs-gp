@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+scrape_configs:
+  - job_name: nabs-api
+    static_configs: [{ targets: ["nabs-core-api:8000"] }]
+  - job_name: redis
+    static_configs: [{ targets: ["redis-exporter:9121"] }]
+  - job_name: postgres
+    static_configs: [{ targets: ["postgres-exporter:9187"] }]
+  - job_name: celery
+    static_configs: [{ targets: ["celery-exporter:9808"] }]
+
+# Bölüm 11 alarm eşikleri (Alertmanager kuralı örneği):
+# - backup_failure_rate (zone bazında) > %10 / 1h
+# - celery_queue_backlog_age > 15m
+# - webhook imza doğrulama hatası sayısı ani artış (spoof/misconfig göstergesi)

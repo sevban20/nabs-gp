@@ -1,0 +1,68 @@
+groups:
+  - name: nabs-gp-operations
+    rules:
+      # Bölüm 11: webhook imza doğrulama hatalarında ani artış
+      # (spoof veya yanlış yapılandırılmış SFTPGo göstergesi)
+      - alert: WebhookSignatureFailuresSpike
+        expr: sum(increase(http_requests_total{handler=~".*webhook.*",status="401"}[10m])) > 20
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Webhook imza doğrulama hatalarında artış"
+          description: "Son 10 dakikada 20'den fazla 401. Olası spoof/misconfig."
+
+      # Celery kuyruk backlog'u
+      - alert: CeleryQueueBacklog
+        expr: sum(celery_queue_length) > 200
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Celery kuyruk derinliği yüksek"
+          description: "Kuyrukta 200+ bekleyen görev — worker kapasitesi yetersiz olabilir."
+
+      # Cihaz erişilebilirliği (up/down)
+      - alert: AssetsDown
+        expr: nabs_assets_unreachable_total > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} cihaz erişilemez durumda"
+          description: "Bir veya daha fazla aktif cihaza TCP probe başarısız."
+
+      # Bayat yedek: 24 saattir başarılı yedeği olmayan aktif cihazlar
+      - alert: StaleBackups
+        expr: nabs_assets_backup_stale_total > 5
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} cihazın yedeği bayat (>24s)"
+          description: "Yedekleme zamanlaması veya erişim sorunu olabilir."
+
+      # Kritik güvenlik bulguları
+      - alert: CriticalAdvisoriesOpen
+        expr: nabs_advisories_open{severity="CRITICAL"} > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $value }} açık KRİTİK güvenlik bulgusu"
+          description: "Envanterde çözülmemiş kritik bulgular var."
+
+      # API 5xx hata oranı
+      - alert: ApiHighErrorRate
+        expr: |
+          100 * sum(rate(http_requests_total{status=~"5.."}[5m]))
+          / clamp_min(sum(rate(http_requests_total[5m])), 1e-9) > 5
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "API 5xx hata oranı %5 üzerinde"
+          description: "Backend'de yaygın hata; loglara bakın."
+
+      # API erişilemez
+      - alert: ApiDown
+        expr: up{job="nabs-api"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "NABS-GP API scrape edilemiyor"
+          description: "Prometheus API hedefini 2 dakikadır çekemiyor."

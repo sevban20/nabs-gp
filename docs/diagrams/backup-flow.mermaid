@@ -1,0 +1,33 @@
+sequenceDiagram
+    autonumber
+    actor U as Ağ Admini
+    participant API as nabs-core-api
+    participant R as Redis
+    participant W as celery-worker
+    participant D as Ağ Cihazı
+    participant S as sanitizer
+    participant G as Git Repo
+    participant DB as PostgreSQL
+
+    Note over U,DB: Aktif yedekleme (SSH)
+    U->>API: POST /assets/{id}/backup
+    API->>DB: BackupHistory(status=QUEUED)
+    API->>R: run_active_backup.delay(history_id)
+    API-->>U: 202 queued (job_id)
+    R->>W: görev teslim
+    W->>DB: status=IN_PROGRESS
+    W->>D: SSH (Scrapli) — read-only "show run"
+    D-->>W: config metni
+    W->>S: sanitize (parolalar maskelenir)
+    S-->>W: temiz config
+    W->>G: değiştiyse commit (diff)
+    W->>DB: status=SUCCESS + commit_hash
+    W->>R: run_security_analysis.delay
+    Note over W,DB: statik + politika taraması → advisories → risk skoru → drift → bildirim
+
+    Note over D,API: Pasif yedekleme (air-gapped)
+    D->>API: SFTP push → SFTPGo webhook (HMAC imzalı)
+    API->>API: imza doğrula + path-traversal kontrol
+    API->>S: sanitize
+    API->>G: commit
+    API->>R: run_security_analysis.delay

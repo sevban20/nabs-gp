@@ -1,0 +1,137 @@
+{
+  "uid": "nabs-operations",
+  "title": "NABS-GP — Operasyon (Varlıklar / Yedekler / Bulgular)",
+  "tags": ["nabs-gp"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Toplam Varlık",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "nabs_assets_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 2, "type": "stat", "title": "Up",
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "nabs_assets_reachable_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] }
+    },
+    {
+      "id": 3, "type": "stat", "title": "Down",
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "nabs_assets_unreachable_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short",
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null },
+          { "color": "red", "value": 1 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Yedek OK (24h)",
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "nabs_backups_24h_total{status=\"SUCCESS\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] }
+    },
+    {
+      "id": 5, "type": "stat", "title": "Yedek HATA (24h)",
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "nabs_backups_24h_total{status=\"FAILED\"} + nabs_backups_24h_total{status=\"TIMEOUT\"}",
+        "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "short",
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null },
+          { "color": "orange", "value": 1 },
+          { "color": "red", "value": 5 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 6, "type": "stat", "title": "Bayat Yedek (>24h)",
+      "description": "24 saattir başarılı yedeği olmayan aktif varlıklar",
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "nabs_assets_backup_stale_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short",
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null },
+          { "color": "orange", "value": 1 },
+          { "color": "red", "value": 5 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Up/Down Trendi",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "nabs_assets_reachable_total", "legendFormat": "up", "refId": "A" },
+        { "expr": "nabs_assets_unreachable_total", "legendFormat": "down", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 15 } }, "overrides": [
+        { "matcher": { "id": "byName", "options": "up" },
+          "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+        { "matcher": { "id": "byName", "options": "down" },
+          "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
+      ] }
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Açık Bulgular (önem bazında)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "nabs_advisories_open", "legendFormat": "{{severity}}", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 9, "type": "table", "title": "Cihaz Durumu ve Risk Skorları",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "nabs_asset_risk_score", "format": "table", "instant": true, "refId": "A" },
+        { "expr": "nabs_asset_reachable", "format": "table", "instant": true, "refId": "B" }
+      ],
+      "transformations": [
+        { "id": "seriesToColumns", "options": { "byField": "hostname" } },
+        { "id": "organize", "options": {
+          "excludeByName": { "Time 1": true, "Time 2": true, "__name__ 1": true,
+            "__name__ 2": true, "instance 1": true, "instance 2": true,
+            "job 1": true, "job 2": true },
+          "renameByName": { "Value #A": "risk", "Value #B": "up (1/0)", "ip": "IP" } } }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [
+        { "matcher": { "id": "byName", "options": "risk" },
+          "properties": [
+            { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+            { "id": "thresholds", "value": { "mode": "absolute", "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 50 },
+              { "color": "green", "value": 80 } ] } }
+          ] }
+      ] }
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Yedekleme Sonuçları (24h penceresi)",
+      "gridPos": { "h": 9, "w": 6, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "nabs_backups_24h_total", "legendFormat": "{{status}}", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Onay Akışı Durumları",
+      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "nabs_remediations_by_status", "legendFormat": "{{status}}", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    }
+  ]
+}

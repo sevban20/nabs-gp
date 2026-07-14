@@ -1,0 +1,32 @@
+# Opsiyonel: Ollama'yı bir konteynerde ÇALIŞTIRMAK isteyenler için
+# (ana stack'e gömülü DEĞİL — bağımsız çalışır, 11434'ü host'a yayar).
+#
+# Kullanım (CPU):
+#   docker compose -f docker-compose.ollama.yml up -d
+#   docker exec nabs-ollama ollama pull llama3:8b-instruct
+#   docker exec nabs-ollama ollama pull nomic-embed-text
+#
+# Ana stack .env'de zaten host.docker.internal:11434'e bakar, dolayısıyla
+# bu konteyner ayrı ağda olsa da API ona host üzerinden ulaşır.
+#
+# Mac M2'de native Ollama uygulaması varsa bu dosyaya GEREK YOK — sadece
+# `ollama serve` + `ollama pull ...` yeterli.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nabs-ollama
+    ports: ["11434:11434"]
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    # --- NVIDIA GPU için (nvidia-container-toolkit kurulu olmalı) ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  ollama_data:

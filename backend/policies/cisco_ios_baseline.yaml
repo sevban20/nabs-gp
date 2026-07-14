@@ -1,0 +1,44 @@
+# Faz 3: Cisco IOS temel sıkılaştırma politikası (CIS uyumlu örnek set)
+rules:
+  - rule_id: POL-SSH-001
+    title: SSH version 2 zorunlu
+    severity: HIGH
+    vendor: cisco_ios
+    match: { type: must_exist, pattern: "^ip ssh version 2" }
+    description: SSHv1 kriptografik olarak kırıktır; v2 zorunlu olmalı.
+    remediation: "Uygula: 'ip ssh version 2'"
+
+  - rule_id: POL-HTTP-002
+    title: Plaintext HTTP yönetimi kapalı olmalı
+    severity: MEDIUM
+    vendor: cisco_ios
+    match: { type: must_not_exist, pattern: "^ip http server$" }
+    description: HTTP yönetim arayüzü kimlik bilgilerini düz metin taşır.
+    remediation: "Uygula: 'no ip http server'"
+
+  - rule_id: POL-VTY-003
+    title: VTY hatlarında SSH zorunlu
+    severity: HIGH
+    vendor: cisco_ios
+    match:
+      type: child_must_exist
+      parent: "^line vty"
+      child: "transport input ssh"
+    description: Tüm VTY hatları yalnızca SSH kabul etmeli.
+    remediation: "Her 'line vty' altında: 'transport input ssh'"
+
+  - rule_id: POL-AAA-004
+    title: AAA modeli etkin olmalı
+    severity: MEDIUM
+    vendor: cisco_ios
+    match: { type: must_exist, pattern: "^aaa new-model" }
+    description: Merkezi kimlik doğrulama için AAA gereklidir.
+    remediation: "Uygula: 'aaa new-model'"
+
+  - rule_id: POL-LOG-005
+    title: Merkezi syslog hedefi tanımlı olmalı
+    severity: LOW
+    vendor: cisco_ios
+    match: { type: must_exist, pattern: "^logging host" }
+    description: Olay izlenebilirliği için merkezi log gereklidir.
+    remediation: "Uygula: 'logging host <syslog-ip>'"

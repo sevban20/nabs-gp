@@ -1,0 +1,52 @@
+flowchart LR
+    ROOT["NABS-GP"]
+
+    ROOT --> FE["Sunum\n(nabs-dashboard)"]
+    ROOT --> BE["Uygulama\n(nabs-core-api + worker)"]
+    ROOT --> INF["Altyapı"]
+
+    FE --> FE1["React SPA (Vite)"]
+    FE --> FE2["nginx (statik + /api proxy)"]
+
+    BE --> API["API Katmanı (REST)"]
+    BE --> CORE["Çekirdek Servisler"]
+    BE --> DOM["Alan Servisleri"]
+    BE --> AI["AI Servisleri"]
+    BE --> TASK["Asenkron Görevler"]
+
+    API --> A1["auth · users · apikeys"]
+    API --> A2["assets · credentials · jobs"]
+    API --> A3["advisories · remediations"]
+    API --> A4["discovery · topology · compliance"]
+    API --> A5["dashboard · reports · webhooks"]
+    API --> A6["settings · system · ai"]
+
+    CORE --> C1["crypto (AES-256-GCM, fail-closed)"]
+    CORE --> C2["auth (JWT + RBAC + API key)"]
+    CORE --> C3["secrets (Vault→env)"]
+    CORE --> C4["settings_service (DB→env)"]
+    CORE --> C5["ratelimit · audit · observability"]
+    CORE --> C6["database · migrations"]
+
+    DOM --> D1["git_engine (sürümleme/diff)"]
+    DOM --> D2["sanitizer (çok-vendor maskeleme)"]
+    DOM --> D3["static_analyzer · policy_engine"]
+    DOM --> D4["risk_engine · drift"]
+    DOM --> D5["discovery · topology · oui"]
+    DOM --> D6["cve_sync · reporting · tls_check · notifications"]
+
+    AI --> AI1["analyzer (Ollama gateway)"]
+    AI --> AI2["rag (pgvector, chunk/embed)"]
+
+    TASK --> T1["run_active_backup · run_scheduled_backups"]
+    TASK --> T2["run_security_analysis · sync_cves"]
+    TASK --> T3["collect_topology · collect_l2_inventory"]
+    TASK --> T4["check_asset_reachability"]
+    TASK --> T5["run_compliance_sweep · purge_expired"]
+    TASK --> T6["mirror_git_repository"]
+
+    INF --> I1["PostgreSQL 16 + pgvector"]
+    INF --> I2["Redis (Celery)"]
+    INF --> I3["Git Repo Volume"]
+    INF --> I4["SFTPGo"]
+    INF --> I5["Caddy (TLS) · Prometheus/Grafana · Vault"]

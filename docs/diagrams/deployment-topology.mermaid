@@ -1,0 +1,56 @@
+flowchart TB
+    subgraph HOST["Docker Host (Linux) — docker compose"]
+        direction TB
+
+        subgraph BASE["Çekirdek stack (docker-compose.yml)"]
+            api["nabs-core-api :8000"]
+            wrk["celery-worker-high"]
+            beat["celery-beat"]
+            dash["nabs-dashboard :5173"]
+            db[("nabs-db :5432")]
+            redis[("nabs-redis :6379")]
+            sftp["sftpgo :2022/:8080"]
+        end
+
+        subgraph TLSL["TLS overlay (docker-compose.tls.yml)"]
+            caddy["caddy :80/:443"]
+        end
+
+        subgraph OBSL["Observability (docker-compose.observability.yml)"]
+            prom["prometheus :9090"]
+            graf["grafana :3000"]
+            exps["exporter'lar\n(redis/pg/celery)"]
+        end
+
+        subgraph VAULTL["Vault overlay (docker-compose.vault.yml)"]
+            vault["nabs-vault :8200"]
+        end
+
+        subgraph VOLS["Kalıcı Volume'lar"]
+            v1[["postgres_data"]]
+            v2[["git_repository_storage\n(şifreli disk önerilir)"]]
+            v3[["sftpgo_data / sftpgo_uploads"]]
+            v4[["tls_certs"]]
+            v5[["vault_data"]]
+        end
+    end
+
+    net(["Kurum Ağı /\nYönetilen Cihazlar"])
+    ext(["Harici: Ollama (opsiyonel)\nkurum LDAP/Vault (varsa)"])
+
+    net -->|SSH/SNMP| wrk
+    caddy --> dash
+    caddy --> api
+    api --> db
+    api --> redis
+    wrk --> db
+    api -.-> vault
+    api -.-> ext
+    db --- v1
+    api --- v2
+    wrk --- v2
+    sftp --- v3
+    api --- v4
+    caddy --- v4
+    vault --- v5
+    api --> prom

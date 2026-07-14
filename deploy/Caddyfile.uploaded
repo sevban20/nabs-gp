@@ -1,0 +1,19 @@
+# GUI'den yüklenen web sunucu sertifikasını kullanan Caddy yapılandırması.
+# Sertifika/anahtar backend tarafından /var/nabs/tls'e yazılır; Caddy dosya
+# değişince otomatik yeniden yükler (yeniden başlatma gerekmez).
+#
+# Bu varyantı kullanmak için docker-compose.tls.yml'de Caddy'nin Caddyfile'ını
+# bununla değiştirin ve tls_certs volume'unu Caddy'ye mount edin (dosyada hazır).
+
+{$NABS_DOMAIN} {
+    tls /var/nabs/tls/fullchain.pem /var/nabs/tls/privkey.pem
+
+    encode gzip
+
+    handle /api/* {
+        reverse_proxy nabs-core-api:8000
+    }
+    handle {
+        reverse_proxy nabs-dashboard:80
+    }
+}

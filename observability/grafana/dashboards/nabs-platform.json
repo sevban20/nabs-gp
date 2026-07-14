@@ -1,0 +1,97 @@
+{
+  "uid": "nabs-platform",
+  "title": "NABS-GP — Platform (Celery / Redis / Postgres)",
+  "tags": ["nabs-gp"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Celery Kuyruk Derinliği",
+      "description": "Spec Bölüm 11 alarm eşiği: backlog yaşı > 15 dk",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(celery_queue_length)", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short",
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null },
+          { "color": "orange", "value": 50 },
+          { "color": "red", "value": 200 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 2, "type": "stat", "title": "Görev Başarı Oranı (1h)",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "100 * sum(increase(celery_task_succeeded_total[1h])) / clamp_min(sum(increase(celery_task_succeeded_total[1h])) + sum(increase(celery_task_failed_total[1h])), 1)",
+        "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1,
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "red", "value": null },
+          { "color": "orange", "value": 90 },
+          { "color": "green", "value": 99 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 3, "type": "stat", "title": "Redis Bellek",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "redis_memory_used_bytes", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Postgres Bağlantıları",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "sum(pg_stat_database_numbackends{datname!~\"template.*|postgres\"})",
+        "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Celery Görevleri (başarılı/başarısız)",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(rate(celery_task_succeeded_total[5m])) by (name)",
+          "legendFormat": "OK {{name}}", "refId": "A" },
+        { "expr": "sum(rate(celery_task_failed_total[5m])) by (name)",
+          "legendFormat": "FAIL {{name}}", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Kuyruk Bazında Derinlik",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "celery_queue_length", "legendFormat": "{{queue_name}}", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Redis Bağlı İstemciler / İşlem Hızı",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "redis_connected_clients", "legendFormat": "istemci", "refId": "A" },
+        { "expr": "rate(redis_commands_processed_total[5m])", "legendFormat": "komut/s", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Postgres İşlem Hızı (commit/rollback)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(rate(pg_stat_database_xact_commit{datname!~\"template.*\"}[5m]))",
+          "legendFormat": "commit/s", "refId": "A" },
+        { "expr": "sum(rate(pg_stat_database_xact_rollback{datname!~\"template.*\"}[5m]))",
+          "legendFormat": "rollback/s", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    }
+  ]
+}

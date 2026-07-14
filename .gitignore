@@ -1,0 +1,19 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+dist/
+frontend/dist/
+*.egg-info/
+.coverage
+git_repo/
+sftpgo_uploads/
+*.log
+.DS_Store
+vault-init.secret
+
+# build artefaktları
+*.zip

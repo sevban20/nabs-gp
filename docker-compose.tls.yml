@@ -1,0 +1,37 @@
+# TLS terminasyonu (Caddy, otomatik HTTPS). Ana stack'in önüne konur.
+# Kullanım:
+#   NABS_DOMAIN=nabs.sirket.local docker compose \
+#     -f docker-compose.yml -f docker-compose.tls.yml up -d
+# Sonra dashboard'a https://<NABS_DOMAIN> üzerinden erişin ve .env'de
+# CORS_ORIGINS=https://<NABS_DOMAIN> ayarlayın.
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: nabs-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      NABS_DOMAIN: ${NABS_DOMAIN:-localhost}
+    volumes:
+      # Otomatik HTTPS (Let's Encrypt) için ./deploy/Caddyfile;
+      # GUI'den yüklenen sertifikayı kullanmak için ./deploy/Caddyfile.uploaded'ı bağlayın.
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - tls_certs:/var/nabs/tls:ro       # GUI'den yüklenen sertifika (Caddyfile.uploaded ile)
+    depends_on:
+      - nabs-core-api
+      - nabs-dashboard
+
+# Not: production'da nabs-dashboard'un 5173 port yayınını docker-compose.yml'den
+# kaldırıp yalnızca Caddy'nin 443'ünü dışa açın (dashboard'a doğrudan HTTP
+# erişimini kapatın).
+
+volumes:
+  caddy_data:
+  caddy_config:
+  tls_certs:
+    external: false
+    name: networkbackuptool_tls_certs   # ana stack'teki tls_certs ile aynı volume
