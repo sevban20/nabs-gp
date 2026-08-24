@@ -23,8 +23,10 @@ services:
       - "8200:8200"
     restart: unless-stopped
     healthcheck:
-      # 501 = initialize edilmemiş, 503 = sealed; ikisi de "ayakta" sayılır
-      test: ["CMD", "sh", "-c", "vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1 || [ $? -eq 2 ] || [ $? -eq 1 ]"]
+      # vault status çıkış kodları: 0 = unsealed, 2 = sealed, 1 = erişilemiyor.
+      # 0 ve 2 "ayakta" sayılır (sealed Vault da ayaktadır, sadece kilitlidir).
+      # NOT: $$ compose'un değişken interpolasyonundan kaçmak için gerekli.
+      test: ["CMD-SHELL", "vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1; s=$$?; [ $$s -eq 0 ] || [ $$s -eq 2 ]"]
       interval: 15s
       timeout: 5s
       retries: 3

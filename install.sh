@@ -51,12 +51,23 @@ echo
 # ---- 1) Önkoşullar ----
 say "Önkoşullar kontrol ediliyor"
 command -v docker >/dev/null 2>&1 || die "docker bulunamadı. Docker Engine 24+ kurun."
+COMPOSE_V1=0
 if docker compose version >/dev/null 2>&1; then DC="docker compose"
-elif command -v docker-compose >/dev/null 2>&1; then DC="docker-compose"
-else die "docker compose (v2) bulunamadı."; fi
+elif command -v docker-compose >/dev/null 2>&1; then DC="docker-compose"; COMPOSE_V1=1
+else die "docker compose (v2) bulunamadı. Kurulum: https://docs.docker.com/compose/install/linux/"; fi
 command -v python3 >/dev/null 2>&1 || die "python3 bulunamadı (secret üretimi için gerekli)."
 docker info >/dev/null 2>&1 || die "Docker çalışmıyor ya da yetki yok (sudo/gruba ekleme gerekebilir)."
 ok "docker, ${DC}, python3 mevcut"
+if [ "$COMPOSE_V1" = "1" ]; then
+  echo
+  warn "Compose v1 (docker-compose) bulundu. v1 desteklenmiyor ve kullanım ömrü doldu:"
+  warn "  · servisler arası 'condition: service_healthy' bağımlılıkları yok sayılır"
+  warn "    (API, veritabanı hazır olmadan açılmaya çalışır)"
+  warn "  · bazı Compose Spec alanları sessizce atlanır"
+  warn "Önerilen: Compose v2 eklentisini kurun →  sudo apt install docker-compose-plugin"
+  warn "  (ya da https://docs.docker.com/compose/install/linux/)"
+  yesno "Yine de v1 ile devam edilsin mi?" "h" || die "Compose v2 kurulduktan sonra tekrar çalıştırın."
+fi
 
 # ---- .env zaten var mı ----
 if [ -f .env ]; then

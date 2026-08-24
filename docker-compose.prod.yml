@@ -11,18 +11,17 @@
 # Not: port yayınları ana docker-compose.yml'de zaten 127.0.0.1'e bağlıdır;
 # dışarıya yalnızca Caddy'nin 80/443'ü ve SFTPGo'nun 2022'si açıktır.
 
-x-logging: &default-logging
-  driver: json-file
-  options:
-    max-size: "20m"
-    max-file: "5"
-
 services:
   nabs-db:
-    logging: *default-logging
-    deploy:
-      resources:
-        limits: { memory: 2g }
+    # Anchor ilk serviste tanımlanır; diğerleri *default-logging ile kullanır.
+    # (Üst düzey x-... uzantı anahtarı kullanılmıyor — eski Compose sürümleri
+    # bunu reddedebiliyor.)
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    mem_limit: 2g
 
   nabs-redis:
     # Parolasız broker'a izin verme; değişken yoksa compose hata verip durur.
@@ -35,27 +34,19 @@ services:
     environment:
       REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD .env icinde tanimli olmali}"
     logging: *default-logging
-    deploy:
-      resources:
-        limits: { memory: 512m }
+    mem_limit: 512m
 
   nabs-core-api:
     logging: *default-logging
-    deploy:
-      resources:
-        limits: { memory: 2g }
+    mem_limit: 2g
 
   celery-worker-high:
     logging: *default-logging
-    deploy:
-      resources:
-        limits: { memory: 3g }
+    mem_limit: 3g
 
   celery-beat:
     logging: *default-logging
-    deploy:
-      resources:
-        limits: { memory: 512m }
+    mem_limit: 512m
 
   nabs-dashboard:
     logging: *default-logging
