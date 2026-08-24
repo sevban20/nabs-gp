@@ -15,28 +15,60 @@ KV_PATH="${VAULT_KV_MOUNT:-secret}"
 SECRET_PATH="${VAULT_SECRET_PATH:-nabs-gp}"
 
 vx() { docker exec -e VAULT_ADDR=http://127.0.0.1:8200 "$VAULT_CONTAINER" "$@"; }
+die() { echo "HATA: $*" >&2; exit 1; }
+# 'VAR=$(cmd)' kalıbı set -e altında sessizce scripti öldürür; kritik olanları sarıyoruz.
+grab() {  # grab <acikalama> <dosya> <desen>
+  local out
+  out=$(grep -m1 "$3" "$2" 2>/dev/null | awk '{print $NF}') || true
+  [ -n "$out" ] || die "$1 ($2 içinde '$3' bulunamadı)."
+  printf '%s' "$out"
+}
 
 echo "==> Vault durumu kontrol ediliyor…"
+if ! docker inspect -f '{{.State.Status}}' "$VAULT_CONTAINER" 2>/dev/null | grep -q running; then
+  echo "HATA: '$VAULT_CONTAINER' konteyneri çalışmıyor." >&2
+  docker logs --tail 20 "$VAULT_CONTAINER" 2>&1 | sed 's/^/    /' >&2
+  exit 1
+fi
+# İlk saniyelerde listener henüz açılmamış olabilir; kısa bir hazır olma beklemesi.
+for _ in $(seq 1 15); do
+  if vx vault status >/dev/null 2>&1; then _rc=0; else _rc=$?; fi
+  if [ "$_rc" = "0" ] || [ "$_rc" = "2" ]; then break; fi
+  sleep 2
+done
 if vx vault status >/dev/null 2>&1; then
   echo "Vault zaten initialize ve unsealed. (Secret yazma adımına geçiliyor.)"
   if [ ! -f "$OUT_FILE" ]; then
     echo "HATA: $OUT_FILE yok; root token olmadan devam edilemez." >&2
     exit 1
   fi
-  ROOT_TOKEN=$(grep 'Root Token' "$OUT_FILE" | awk '{print $NF}')
+  ROOT_TOKEN=$(grab "Root token okunamadı" "$OUT_FILE" 'Root Token')
 else
-  # status exit code: 2 = sealed, 1/other = uninitialized
-  if vx vault status 2>&1 | grep -q 'Initialized.*true'; then
+  # DİKKAT: 'vx vault status | grep' YAZMAYIN. Vault sealed iken 2 döner ve
+  # 'set -o pipefail' yüzünden grep eşleşse bile pipeline 2 döner; koşul yanlışlıkla
+  # false olur ve initialize edilmiş bir Vault'ta yeniden 'operator init' denenir.
+  VSTATUS=$(vx vault status 2>&1 || true)
+  if echo "$VSTATUS" | grep -q 'Initialized.*true'; then
     echo "==> Vault initialize edilmiş ama sealed. Unseal ediliyor…"
     if [ ! -f "$OUT_FILE" ]; then echo "HATA: $OUT_FILE yok." >&2; exit 1; fi
     UNSEAL_KEY=$(grep 'Unseal Key 1' "$OUT_FILE" | awk '{print $NF}')
-    ROOT_TOKEN=$(grep 'Root Token' "$OUT_FILE" | awk '{print $NF}')
+    ROOT_TOKEN=$(grab "Root token okunamadı" "$OUT_FILE" 'Root Token')
     vx vault operator unseal "$UNSEAL_KEY" >/dev/null
   else
     echo "==> Vault initialize ediliyor (1 anahtar, eşik 1 — tek düğüm)…"
-    INIT_JSON=$(vx vault operator init -key-shares=1 -key-threshold=1 -format=json)
-    UNSEAL_KEY=$(echo "$INIT_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin)['unseal_keys_b64'][0])")
-    ROOT_TOKEN=$(echo "$INIT_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin)['root_token'])")
+    if ! INIT_JSON=$(vx vault operator init -key-shares=1 -key-threshold=1 -format=json 2>&1); then
+      echo "HATA: 'vault operator init' başarısız oldu. Vault'un yanıtı:" >&2
+      echo "$INIT_JSON" | sed 's/^/    /' >&2
+      echo >&2
+      echo "Tanı için:" >&2
+      echo "    docker exec -e VAULT_ADDR=http://127.0.0.1:8200 $VAULT_CONTAINER vault status" >&2
+      echo "    docker logs --tail 40 $VAULT_CONTAINER" >&2
+      exit 1
+    fi
+    UNSEAL_KEY=$(echo "$INIT_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin)['unseal_keys_b64'][0])") \
+      || die "init çıktısı ayrıştırılamadı. Ham yanıt: $INIT_JSON"
+    ROOT_TOKEN=$(echo "$INIT_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin)['root_token'])") \
+      || die "init çıktısında root token yok. Ham yanıt: $INIT_JSON"
     {
       echo "# NABS-GP Vault init $(date -u +%FT%TZ) — GÜVENLE SAKLAYIN, SUNUCUDAN TAŞIYIN"
       echo "Unseal Key 1: $UNSEAL_KEY"
@@ -72,7 +104,8 @@ vx sh -c "VAULT_TOKEN=$ROOT_TOKEN vault kv put $KV_PATH/$SECRET_PATH \
 echo "==> Uygulama için sınırlı yetkili token üretiliyor (yalnızca okuma)…"
 vx sh -c "VAULT_TOKEN=$ROOT_TOKEN sh -c 'echo \"path \\\"$KV_PATH/data/$SECRET_PATH\\\" { capabilities = [\\\"read\\\"] }\" | vault policy write nabs-read -'" >/dev/null
 APP_TOKEN=$(vx sh -c "VAULT_TOKEN=$ROOT_TOKEN vault token create -policy=nabs-read -period=768h -format=json" \
-  | python3 -c "import sys,json;print(json.load(sys.stdin)['auth']['client_token'])")
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['auth']['client_token'])") \
+  || die "Uygulama token'ı üretilemedi. 'vault token create' çıktısını kontrol edin."
 # App token'ı da güvenli dosyaya yaz (install.sh buradan okuyup .env'e ekler)
 grep -q '^App Token:' "$OUT_FILE" 2>/dev/null \
   && sed -i.bak "s|^App Token:.*|App Token: $APP_TOKEN|" "$OUT_FILE" && rm -f "$OUT_FILE.bak" \

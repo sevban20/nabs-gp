@@ -7,6 +7,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Tüm çıktıyı install.log'a da yaz — bir yerde takılırsa tam hata metni elde kalsın.
+# Dosyada üretilmiş parolalar/token'lar geçebilir: 0600 açılır, işiniz bitince silin.
+if [ -z "${NABS_INSTALL_LOGGING:-}" ]; then
+  export NABS_INSTALL_LOGGING=1
+  : > install.log && chmod 600 install.log
+  exec > >(tee -a install.log) 2>&1
+fi
+
 # ---- görsel yardımcılar ----
 if [ -t 1 ]; then
   B=$(printf '\033[1m'); D=$(printf '\033[2m'); G=$(printf '\033[32m')
@@ -124,9 +132,10 @@ if [ "$OVERWRITE" = "1" ]; then
   fi
 
   # ---- CORS ----
+  # GUI'nin gerçek origin'i: Caddy varsa https://domain, yoksa http://domain:5173
   if [ "$DOMAIN" = "localhost" ]; then CORS="http://localhost:5173"
-  elif [ "$TLS" = "1" ]; then CORS="http://$DOMAIN"
-  else CORS="https://$DOMAIN"; fi
+  elif [ "${TLS:-1}" = "2" ]; then CORS="https://$DOMAIN"
+  else CORS="http://$DOMAIN:5173"; fi
 
   # ---- .env yaz ----
   say ".env yazılıyor"
@@ -155,6 +164,13 @@ if [ "$OVERWRITE" = "1" ]; then
     echo "DATA_RETENTION_DAYS=365"
     echo "DB_BACKUP_RETENTION_DAYS=14"
     echo "GF_SECURITY_ADMIN_PASSWORD=${GF_PASS}"
+    # GUI bind adresi: Caddy varsa yalnızca loopback (dışarıya 443'ten çıkılır),
+    # Caddy yoksa 5173 ağa açılmalı yoksa GUI'ye hiçbir yerden erişilemez.
+    if [ "$DOMAIN" != "localhost" ] && [ "${TLS:-1}" != "2" ]; then
+      echo "NABS_GUI_BIND=0.0.0.0"
+    else
+      echo "NABS_GUI_BIND=127.0.0.1"
+    fi
     if [ "$DOMAIN" != "localhost" ]; then
       echo "NABS_DOMAIN=${DOMAIN}"
       # Let's Encrypt yalnızca herkese açık alan adlarına sertifika verir.
@@ -219,8 +235,11 @@ if [ "$USE_VAULT" = "1" ]; then
     if [ "$STATE" = "restarting" ] || [ "$STATE" = "exited" ]; then
       break
     fi
-    VS_OUT=$(docker exec -e VAULT_ADDR=http://127.0.0.1:8200 nabs-vault vault status 2>&1)
-    rc=$?
+    if VS_OUT=$(docker exec -e VAULT_ADDR=http://127.0.0.1:8200 nabs-vault vault status 2>&1); then
+      rc=0
+    else
+      rc=$?
+    fi
     if [ "$rc" = "0" ] || [ "$rc" = "2" ]; then VAULT_READY=1; ok "Vault hazır"; break; fi
     sleep 2
   done
@@ -237,11 +256,11 @@ if [ "$USE_VAULT" = "1" ]; then
     docker logs --tail 30 nabs-vault 2>&1 | sed 's/^/    /'
     echo "${D}------------------------------------------------------------${N}"
     echo
-    VLOG=$(docker logs --tail 60 nabs-vault 2>&1)
+    VLOG=$(docker logs --tail 60 nabs-vault 2>&1 || true)
     if echo "$VLOG" | grep -qi "permission denied"; then
       warn "Sebep: raft veri dizininin (/vault/data) sahipliği. Vault konteyner içinde"
       warn "root olmayan 'vault' kullanıcısı olarak çalışır; volume root'a ait ise yazamaz."
-      VOL=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/vault/data"}}{{.Name}}{{end}}{{end}}' nabs-vault 2>/dev/null)
+      VOL=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/vault/data"}}{{.Name}}{{end}}{{end}}' nabs-vault 2>/dev/null || true)
       [ -z "$VOL" ] && VOL="<proje>_vault_data   # 'docker volume ls' ile bulun"
       echo "    docker run --rm -v ${VOL}:/data alpine chown -R vault:vault /data"
     elif echo "$VLOG" | grep -qi "address already in use"; then
@@ -370,11 +389,14 @@ else
 fi
 
 # ---- 12) Özet ----
-URL="http://localhost:5173"
-[ "${TLS:-1}" = "2" ] && URL="https://${DOMAIN}"
+if [ "${TLS:-1}" = "2" ]; then URL="https://${DOMAIN}"
+elif [ "${DOMAIN:-localhost}" != "localhost" ]; then URL="http://${DOMAIN}:5173"
+else URL="http://localhost:5173"; fi
 echo
 echo "${G}${B}  Kurulum tamamlandı.${N}"
 echo "  ${B}GUI:${N}   $URL"
+[ "${TLS:-1}" != "2" ] && [ "${DOMAIN:-localhost}" != "localhost" ] && \
+  echo "  ${Y}Uyarı:${N} TLS seçilmedi — GUI trafiği şifresiz HTTP. Üretim öncesi TLS'i açın (Bölüm 6.1)."
 echo "  ${B}API:${N}   http://localhost:8000/api/docs"
 [ "${OBS:-0}" = "1" ] && echo "  ${B}Grafana:${N} http://localhost:3000  (admin / .env GF_SECURITY_ADMIN_PASSWORD)"
 echo "  ${B}Admin:${N} $ADMIN_USER"

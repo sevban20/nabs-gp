@@ -1,4 +1,6 @@
-FROM python:3.11-slim
+# Taban imaj sabitlenmiştir: bookworm'da OpenSSH 9.2 gelir. Sabitlenmezse
+# etiket eski bir bullseye'a (OpenSSH 8.4) düşebilir ve ssh seçenek adları değişir.
+FROM python:3.11-slim-bookworm
 
 # git: config sürümleme · openssh-client: Scrapli 'system' transport (ssh binary)
 RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client \
@@ -12,6 +14,20 @@ COPY app ./app
 COPY policies ./policies
 # Eski ağ cihazları (Huawei/Fortinet vb.) için legacy KEX/cipher'lara izin veren ssh config
 COPY deploy/ssh_config /srv/nabs/ssh_config
+
+# Pubkey algoritma seçeneğinin adı OpenSSH sürümüne göre değişir (>=8.5 ile
+# yeniden adlandırıldı). Derleme sırasında hangisinin kabul edildiğini ölçüp
+# doğru olanı ekliyoruz; sonra config'i ssh'ın kendisine doğrulatıyoruz —
+# hatalıysa build burada patlar, ilk yedekleme denemesinde değil.
+RUN set -eux; \
+    ssh -V; \
+    if ssh -G -o 'PubkeyAcceptedAlgorithms=+ssh-rsa' probe >/dev/null 2>&1; then \
+        echo '    PubkeyAcceptedAlgorithms +ssh-rsa' >> /srv/nabs/ssh_config; \
+    else \
+        echo '    PubkeyAcceptedKeyTypes +ssh-rsa' >> /srv/nabs/ssh_config; \
+    fi; \
+    ssh -G -F /srv/nabs/ssh_config buildprobe >/dev/null; \
+    echo "ssh_config dogrulandi:"; grep -iE 'pubkey' /srv/nabs/ssh_config
 
 # Non-root çalıştırma: uygulama ve veri dizinleri appuser'a ait
 RUN useradd --create-home --uid 10001 appuser \

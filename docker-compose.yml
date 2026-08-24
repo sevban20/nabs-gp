@@ -76,7 +76,9 @@ services:
     build: { context: ./frontend, dockerfile: Dockerfile }
     container_name: nabs-dashboard
     restart: unless-stopped
-    ports: ["127.0.0.1:5173:80"]      # dışarıya Caddy (443) üzerinden çıkılır
+    # Caddy (TLS) kullanılıyorsa 127.0.0.1; Caddy yoksa GUI'ye ağdan erişilebilmesi
+    # için install.sh bunu 0.0.0.0 yapar (bu durumda trafik ŞİFRESİZ HTTP olur).
+    ports: ["${NABS_GUI_BIND:-127.0.0.1}:5173:80"]
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
       interval: 15s

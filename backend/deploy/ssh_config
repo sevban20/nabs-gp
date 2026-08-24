@@ -5,8 +5,11 @@
 Host *
     KexAlgorithms +diffie-hellman-group1-sha1,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1,diffie-hellman-group-exchange-sha256
     HostKeyAlgorithms +ssh-rsa,ssh-dss
-    PubkeyAcceptedAlgorithms +ssh-rsa
-    PubkeyAcceptedKeyTypes +ssh-rsa
+    # NOT: pubkey algoritma seçeneğinin ADI OpenSSH sürümüne göre değişir:
+    #   OpenSSH < 8.5  -> PubkeyAcceptedKeyTypes
+    #   OpenSSH >= 8.5 -> PubkeyAcceptedAlgorithms
+    # Yanlışını yazmak "Bad configuration option" ile TÜM SSH'ı bozar, o yüzden
+    # burada sabit yazılmaz; Dockerfile imaj derlenirken doğru olanı ekler.
     Ciphers +aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc
     MACs +hmac-sha1,hmac-sha1-96
     StrictHostKeyChecking no
