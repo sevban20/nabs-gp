@@ -53,20 +53,48 @@ else
   warn "Sonraki adımlar anlamsız olabilir."
 fi
 
-say "3) Cihazın önerdiği algoritmalar"
+say "3) AĞ YOLU: sunucu ile konteyner aynı yere mi gidiyor?"
+# NOT: 'head -c N' banner'dan kısa gelirse bloklar; 'head -1' satır sonunda döner.
+HOST_BANNER=$(timeout 8 bash -c "exec 3<>/dev/tcp/$HOST/22; head -1 <&3" 2>/dev/null | tr -d '\r\n')
+CONT_BANNER=$(dex timeout 8 bash -c "exec 3<>/dev/tcp/$HOST/22; head -1 <&3" 2>/dev/null | tr -d '\r\n')
+echo "    sunucudan  : ${HOST_BANNER:-(yanıt yok)}"
+echo "    konteynerden: ${CONT_BANNER:-(yanıt yok)}"
+if [ -n "$HOST_BANNER" ] && [ -n "$CONT_BANNER" ] && [ "$HOST_BANNER" != "$CONT_BANNER" ]; then
+  bad "BANNER'LAR FARKLI — konteyner başka bir makineye bağlanıyor!"
+  warn "Sebep neredeyse kesin: Docker ağ aralığı cihazın aralığıyla ÇAKIŞIYOR."
+  warn "Konteyner içindeki rota:"
+  dex sh -c "ip route get $HOST 2>/dev/null || ip route" 2>/dev/null | sed 's/^/      /'
+  warn "Sunucudaki rota:"
+  ip route get "$HOST" 2>/dev/null | sed 's/^/      /'
+  warn "Docker ağlarının kullandığı subnet'ler:"
+  for n in $(docker network ls --format '{{.Name}}'); do
+    sub=$(docker network inspect "$n" --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null)
+    [ -n "$sub" ] && printf "      %-28s %s\n" "$n" "$sub"
+  done
+  echo
+  warn "Çözüm: Docker'ın adres havuzunu cihaz ağınızla çakışmayacak şekilde daraltın."
+  warn "  /etc/docker/daemon.json:"
+  echo '        { "default-address-pools": [ {"base":"10.201.0.0/16","size":24} ] }'
+  warn "  sonra: systemctl restart docker && docker compose up -d"
+  warn "  (Mevcut ağları silmek gerekir: docker compose down && docker network prune)"
+elif [ -n "$CONT_BANNER" ]; then
+  ok "Konteyner ve sunucu aynı cihaza ulaşıyor: $CONT_BANNER"
+fi
+
+say "4) Cihazın önerdiği algoritmalar"
 dex timeout 15 ssh -vv -o BatchMode=yes -o StrictHostKeyChecking=no \
   -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
   "nonexistent@$HOST" exit 2>&1 |
   grep -iE "peer server KEXINIT|kex_exchange|no matching|Their offer|remote software version" |
   sed 's/^/    /' | head -12
 
-say "4) NABS ssh_config OLMADAN (modern varsayılanlar)"
+say "5) NABS ssh_config OLMADAN (modern varsayılanlar)"
 OUT_NOCFG=$(dex timeout 20 ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
   -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
   "$USER_NAME@$HOST" exit 2>&1)
 echo "$OUT_NOCFG" | sed 's/^/    /' | head -6
 
-say "5) NABS ssh_config İLE (üretimde kullanılan yol)"
+say "6) NABS ssh_config İLE (üretimde kullanılan yol)"
 if dex test -f "$SSH_CFG"; then
   OUT_CFG=$(dex timeout 20 ssh -F "$SSH_CFG" -o BatchMode=yes -o ConnectTimeout=10 \
     "$USER_NAME@$HOST" exit 2>&1)
@@ -79,14 +107,14 @@ if dex test -f "$SSH_CFG"; then
   fi
   if echo "$OUT_CFG" | grep -qi "no matching"; then
     bad "Legacy ayara rağmen algoritma uyuşmazlığı sürüyor."
-    warn "Cihazın önerdiklerini (3. adım) ssh_config'e ekleyin: backend/deploy/ssh_config"
+    warn "Cihazın önerdiklerini (4. adım) ssh_config'e ekleyin: backend/deploy/ssh_config"
   fi
 else
   warn "ssh_config olmadığı için bu adım atlandı."
 fi
 
 if [ -n "$VENDOR" ]; then
-  say "6) Gerçek yedekleme kod yolu ($VENDOR)"
+  say "7) Gerçek yedekleme kod yolu ($VENDOR)"
   warn "Parola istenecek; ekrana yazılmaz ve hiçbir yere kaydedilmez."
   read -rs -p "    $USER_NAME parolası: " DEV_PASS; echo
   DEV_PASS="$DEV_PASS" docker exec -i -e DEV_PASS \

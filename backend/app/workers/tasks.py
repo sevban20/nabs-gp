@@ -110,6 +110,10 @@ def _scrapli_ssh_kwargs() -> dict:
     kw = {"auth_strict_key": False, "ssh_config_file": True}
     if _ssh_config_usable():
         kw["ssh_config_file"] = SSH_CONFIG_FILE
+    # NABS_SSH_DEBUG=1 → cihazla alışverişin ham dökümü (teşhis için).
+    # Parola girişleri de dosyaya düşebilir; teşhis bitince kapatın ve silin.
+    if _os.getenv("NABS_SSH_DEBUG") == "1":
+        kw["channel_log"] = "/tmp/nabs_channel.log"
     return kw
 
 
@@ -176,8 +180,15 @@ def run_discovery_scan(cidr: str, snmp_community: str = "public") -> list[dict]:
     return scan_network(cidr, snmp_community)
 
 
-# Fortinet ailesi prompt'u: "FGT60F # ", "FGT (root) # ", "FSW > " …
-FORTINET_PROMPT_PATTERN = r"(?im)^[\w.\-]+\s*(\([\w.\-]+\))?\s*[#$>]\s*$"
+# Fortinet ailesi prompt'u. Eski desen yalnızca [\w.-] kabul ediyordu ve
+# "admin@FSW #", "FSW-01:~ #", "FSW (interim) #" gibi biçimlerde EŞLEŞMİYORDU;
+# eşleşmeyince scrapli prompt'u bekleyip 'timed out reading from transport'
+# veriyor. Desen genişletildi: harf/rakam dışında @ : / ~ ( ) [ ] boşluk ve
+# nokta/tire de kabul ediliyor, satır sonundaki #, $ veya > ile bitmesi şartıyla.
+# Cihazınız yine de uymuyorsa NABS_FORTINET_PROMPT ile kendi desenini verin.
+_DEFAULT_FORTINET_PROMPT = r"(?im)^[\w.\-@:/~\[\]() ]{1,64}[#$>]\s*$"
+import os as _os2  # noqa: E402
+FORTINET_PROMPT_PATTERN = _os2.getenv("NABS_FORTINET_PROMPT") or _DEFAULT_FORTINET_PROMPT
 
 
 def _disable_paging_generic(conn) -> None:
@@ -188,6 +199,59 @@ def _disable_paging_generic(conn) -> None:
             conn.send_command(pre)
         except Exception:  # noqa: BLE001
             break
+
+
+# Ağ cihazı vendor'leri (Linux tabanlı olmayanlar). Bunlardan biri seçilmişken
+# cihaz modern bir OpenSSH banner'ı veriyorsa, vendor ya da IP büyük ihtimalle
+# yanlıştır — ağ işletim sistemleri eski OpenSSH türevleri kullanır.
+_NETWORK_VENDORS = {
+    "cisco_ios", "fortinet", "fortiswitch", "paloalto", "juniper_junos",
+    "huawei_vrp", "aruba_aoscx", "aruba_procurve", "mikrotik",
+}
+
+
+def _tcp22_hint(host: str, vendor: str | None = None) -> str:
+    """Bağlantı hatasına 'cihaz erişilebilir mi ve gerçekten o cihaz mı' bilgisi ekler.
+
+    Scrapli'nin 'timed out reading from transport' mesajı üç ayrı durumda aynı
+    görünür: cihaz erişilemiyor / kripto uyuşmuyor / prompt eşleşmiyor. SSH
+    banner'ını okumak üçünü de ayırır — ve en sinsi durumu yakalar: varlığın
+    vendor'ü yanlış tanımlanmışsa yanlış sürücü seçilir ve prompt asla eşleşmez.
+    """
+    import re as _re  # noqa: PLC0415
+    import socket  # noqa: PLC0415
+
+    try:
+        with socket.create_connection((host, 22), timeout=5):
+            pass
+    except OSError as exc:
+        return (f"TCP/22 AÇILAMADI ({exc.__class__.__name__}: {exc}) — cihaz "
+                f"erişilemiyor; ağ yolu / ACL / firewall / cihazda SSH açık mı "
+                f"kontrol edin")
+
+    from app.services.discovery import grab_ssh_banner  # noqa: PLC0415
+    banner = grab_ssh_banner(host) or ""
+    hint = f"TCP/22 açık, SSH banner: {banner or '(okunamadı)'}"
+
+    m = _re.search(r"OpenSSH[_-](\d+)", banner)
+    if vendor in _NETWORK_VENDORS and m and int(m.group(1)) >= 8:
+        hint += (f" — bu banner genel amaçlı bir Linux/OpenSSH sunucusuna işaret "
+                 f"ediyor, ağ cihazına değil. Varlık '{vendor}' olarak tanımlı; "
+                 f"bu yüzden o platformun sürücüsü ve prompt deseni kullanılıyor "
+                 f"ve eşleşmiyor. Vendor'ü 'linux' yapın ya da IP'yi düzeltin.")
+    elif vendor in _NETWORK_VENDORS:
+        hint += " (kripto, kimlik bilgisi ya da prompt deseni sorunu olabilir)"
+    return hint
+
+
+def _reraise_with_hint(host: str, exc: Exception, vendor: str | None = None):
+    """Orijinal hatayı erişilebilirlik ipucuyla zenginleştirerek yeniden fırlatır."""
+    msg = f"{exc} | {host}: {_tcp22_hint(host, vendor)}"
+    logger.error("Cihaz bağlantısı başarısız: %s", msg)
+    try:
+        raise type(exc)(msg) from exc
+    except TypeError:            # bazı istisnalar tek argümanla kurulamaz
+        raise RuntimeError(msg) from exc
 
 
 def _open_device_conn(host, username, password, enable_secret, vendor,
@@ -209,7 +273,10 @@ def _open_device_conn(host, username, password, enable_secret, vendor,
             comms_prompt_pattern=FORTINET_PROMPT_PATTERN,
             **_scrapli_ssh_kwargs(),
         )
-        conn.open()
+        try:
+            conn.open()
+        except Exception as exc:  # noqa: BLE001
+            _reraise_with_hint(host, exc, vendor)
         _disable_paging_generic(conn)
         return conn
 
@@ -229,7 +296,10 @@ def _open_device_conn(host, username, password, enable_secret, vendor,
     except TypeError:
         kwargs.pop("auth_secondary", None)
         conn = Scrapli(**kwargs)
-    conn.open()
+    try:
+        conn.open()
+    except Exception as exc:  # noqa: BLE001
+        _reraise_with_hint(host, exc, vendor)
     return conn
 
 
