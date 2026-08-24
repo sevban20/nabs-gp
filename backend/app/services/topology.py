@@ -326,29 +326,72 @@ def merge_l2_inventory(arp_entries: list[dict], mac_entries: list[dict],
     return list(hosts.values())
 
 
+def normalize_device_name(name: str | None) -> str:
+    """Cihaz adını KARŞILAŞTIRMA için normalize eder (görüntülemek için değil).
+
+    Aynı switch, komşularına farklı yazımlarla görünebilir: "SW-C", "sw-c",
+    "SW-C.dedas.local", "SW_C". Normalize edilmezse her yazım ayrı bir düğüm
+    olur ve tek cihaz haritada birkaç kez görünür.
+    """
+    if not name:
+        return ""
+    n = str(name).strip().strip('"').split(".")[0]
+    return re.sub(r"[\s_]+", "-", n).strip("-").lower()
+
+
 def build_topology_graph(links: list[dict], assets: list[dict],
                          endpoints: list[dict] | None = None) -> dict:
     """Komşuluk link'lerinden ağ haritası grafiği üretir.
     Bilinen (envanterdeki) cihazlar risk skoruyla, keşfedilen ama envanterde
     olmayan komşular 'unmanaged' düğüm olarak işaretlenir.
 
+    Düğüm kimliği ad yazımına DUYARSIZDIR: aynı cihaz farklı komşular
+    tarafından farklı yazılmış olsa da (büyük/küçük harf, alan adı eki,
+    alt çizgi) tek düğümde birleşir. Ad tutmazsa yönetim IP'si üzerinden
+    envanterle eşleştirilir.
+
     endpoints verilirse (L2 keşif: ARP/MAC), her uç cihaz görüldüğü switch'e
     bir 'l2' kenarıyla bağlı yaprak düğüm (type='endpoint') olarak eklenir."""
-    known = {a["hostname"]: a for a in assets}
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
 
-    def ensure_node(name: str):
-        if name not in nodes:
-            asset = known.get(name)
-            nodes[name] = {
-                "id": name, "type": "device",
-                "managed": asset is not None,
-                "risk_score": asset["risk_score"] if asset else None,
-                "vendor": asset["vendor"] if asset else None,
-                "ip_address": asset["ip_address"] if asset else None,
-                "is_reachable": asset.get("is_reachable") if asset else None,
-            }
+    # --- kimlik indeksleri: normalize ad ve yönetim IP'si ---
+    asset_by_norm: dict[str, dict] = {}
+    asset_by_ip: dict[str, dict] = {}
+    for a in assets:
+        asset_by_norm[normalize_device_name(a["hostname"])] = a
+        if a.get("ip_address"):
+            asset_by_ip[str(a["ip_address"])] = a
+
+    canonical: dict[str, str] = {}   # normalize ad -> haritada kullanılacak id
+
+    def resolve(name: str | None, ip: str | None = None) -> str | None:
+        """Bir komşu adını haritadaki tekil kimliğe çevirir."""
+        asset = asset_by_ip.get(str(ip)) if ip else None
+        if asset is None:
+            asset = asset_by_norm.get(normalize_device_name(name))
+        if asset is not None:
+            return asset["hostname"]
+
+        norm = normalize_device_name(name)
+        if not norm or norm == "unknown":
+            return None          # adsız komşu — düğüm üretme, sahte kenar olmasın
+        if norm not in canonical:
+            canonical[norm] = str(name).strip().split(".")[0]
+        return canonical[norm]
+
+    def ensure_node(node_id: str, ip: str | None = None):
+        if node_id in nodes:
+            return
+        asset = asset_by_norm.get(normalize_device_name(node_id))
+        nodes[node_id] = {
+            "id": node_id, "type": "device",
+            "managed": asset is not None,
+            "risk_score": asset["risk_score"] if asset else None,
+            "vendor": asset["vendor"] if asset else None,
+            "ip_address": asset["ip_address"] if asset else ip,
+            "is_reachable": asset.get("is_reachable") if asset else None,
+        }
 
     # Envanterdeki her cihaz düğüm olsun (link'i olmasa bile haritada görünsün)
     for a in assets:
@@ -356,9 +399,12 @@ def build_topology_graph(links: list[dict], assets: list[dict],
 
     seen_pairs: set[tuple] = set()
     for link in links:
-        src, dst = link["source_device"], link["remote_device"]
+        src = resolve(link.get("source_device"))
+        dst = resolve(link.get("remote_device"), link.get("remote_ip"))
+        if not src or not dst or src == dst:
+            continue                       # kendine link ya da adsız komşu
         ensure_node(src)
-        ensure_node(dst)
+        ensure_node(dst, link.get("remote_ip"))
         pair = tuple(sorted([src, dst]))
         if pair in seen_pairs:
             continue
@@ -371,7 +417,7 @@ def build_topology_graph(links: list[dict], assets: list[dict],
         })
 
     for ep in endpoints or []:
-        parent = ep.get("seen_on_device")
+        parent = resolve(ep.get("seen_on_device"))
         if not parent:
             continue
         ensure_node(parent)
