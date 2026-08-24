@@ -21,8 +21,9 @@ const EMPTY = {
   cron_schedule: '0 2 * * *',
 }
 
-export default function AssetForm({ onCreated, onCancel }) {
-  const [form, setForm] = useState(EMPTY)
+export default function AssetForm({ onCreated, onCancel, initial }) {
+  // initial: haritadan "Envantere ekle" ile gelen ön dolgu (hostname/IP/vendor)
+  const [form, setForm] = useState({ ...EMPTY, ...(initial || {}) })
   const [credentials, setCredentials] = useState([])
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)

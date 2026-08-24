@@ -168,6 +168,9 @@ def topology_graph(include_endpoints: bool = False,
         "source_device": l.source_device, "remote_device": l.remote_device,
         "protocol": l.protocol, "local_interface": l.local_interface,
         "remote_interface": l.remote_interface,
+        # remote_ip düğüm kimliği çözümünde (aynı cihazın farklı adlarla
+        # görünmesi), platform ise arayüzdeki komşu detayında kullanılır.
+        "remote_ip": l.remote_ip, "platform": l.platform,
     } for l in db.query(TopologyLink).all()]
     assets = [{
         "hostname": a.hostname, "ip_address": a.ip_address, "vendor": a.vendor,

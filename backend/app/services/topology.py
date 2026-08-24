@@ -414,6 +414,9 @@ def build_topology_graph(links: list[dict], assets: list[dict],
             "protocol": link.get("protocol"),
             "local_interface": link.get("local_interface"),
             "remote_interface": link.get("remote_interface"),
+            # Arayüzün komşu detayını gösterebilmesi için taşınır
+            "remote_ip": link.get("remote_ip"),
+            "platform": link.get("platform"),
         })
 
     for ep in endpoints or []:

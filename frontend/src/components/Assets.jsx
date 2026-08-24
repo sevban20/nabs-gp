@@ -37,7 +37,7 @@ function BackupHistory({ assetId }) {
   )
 }
 
-export default function Assets({ onShowAdvisories }) {
+export default function Assets({ onShowAdvisories, prefill, onPrefillUsed }) {
   const [assets, setAssets] = useState([])
   const [error, setError] = useState(null)
   const [msg, setMsg] = useState(null)
@@ -45,6 +45,10 @@ export default function Assets({ onShowAdvisories }) {
   const [driftAsset, setDriftAsset] = useState(null)
   const [showForm, setShowForm] = useState(false)
   const [historyFor, setHistoryFor] = useState(null)
+
+  // Ağ haritasından yönetilmeyen bir komşu "Envantere ekle" ile gelirse
+  // formu ön dolgulu aç.
+  useEffect(() => { if (prefill) setShowForm(true) }, [prefill])
 
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -99,8 +103,12 @@ export default function Assets({ onShowAdvisories }) {
           <button className="secondary" onClick={load}>Yenile</button>
         </div>
       </div>
-      {showForm && <AssetForm onCancel={() => setShowForm(false)}
-        onCreated={() => { setShowForm(false); setMsg('Cihaz eklendi.'); load() }} />}
+      {showForm && <AssetForm key={prefill ? prefill.hostname : 'new'} initial={prefill}
+        onCancel={() => { setShowForm(false); onPrefillUsed?.() }}
+        onCreated={() => {
+          setShowForm(false); onPrefillUsed?.()
+          setMsg('Cihaz eklendi.'); load()
+        }} />}
       {msg && <div className="info">{msg}</div>}
       {error && <div className="error">{error}</div>}
       <div className="toolbar">

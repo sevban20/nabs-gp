@@ -31,6 +31,8 @@ export default function App() {
   const [authed, setAuthed] = useState(false)
   const [view, setView] = useState('overview')
   const [selectedAsset, setSelectedAsset] = useState(null)
+  // Haritadaki yönetilmeyen komşuyu envantere eklerken formu ön dolduran veri
+  const [assetPrefill, setAssetPrefill] = useState(null)
 
   if (!authed) return <Login onLogin={() => { setAuthed(true); setView('overview') }} />
 
@@ -76,10 +78,12 @@ export default function App() {
         </header>
         <main className="content">
           {view === 'overview' && <Overview onNavigate={go} />}
-          {view === 'assets' && <Assets onShowAdvisories={(a) => go('advisories', a)} />}
+          {view === 'assets' && <Assets onShowAdvisories={(a) => go('advisories', a)}
+            prefill={assetPrefill} onPrefillUsed={() => setAssetPrefill(null)} />}
           {view === 'advisories' && <Advisories asset={selectedAsset} />}
           {view === 'discovery' && <Discovery />}
-          {view === 'topology' && <TopologyMap />}
+          {view === 'topology' && <TopologyMap
+            onOnboard={(p) => { setAssetPrefill(p); setView('assets') }} />}
           {view === 'remediations' && <Remediations />}
           {view === 'jobs' && <Jobs />}
           {view === 'chat' && <Chat />}
