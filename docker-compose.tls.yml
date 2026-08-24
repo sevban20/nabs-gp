@@ -14,6 +14,8 @@ services:
       - "443:443"
     environment:
       NABS_DOMAIN: ${NABS_DOMAIN:-localhost}
+      # Boş = Let's Encrypt; "tls internal" = Caddy'nin kendi CA'sı (iç alan adları)
+      NABS_TLS_MODE: ${NABS_TLS_MODE:-}
     volumes:
       # Otomatik HTTPS (Let's Encrypt) için ./deploy/Caddyfile;
       # GUI'den yüklenen sertifikayı kullanmak için ./deploy/Caddyfile.uploaded'ı bağlayın.

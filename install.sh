@@ -155,7 +155,16 @@ if [ "$OVERWRITE" = "1" ]; then
     echo "DATA_RETENTION_DAYS=365"
     echo "DB_BACKUP_RETENTION_DAYS=14"
     echo "GF_SECURITY_ADMIN_PASSWORD=${GF_PASS}"
-    [ "$DOMAIN" != "localhost" ] && echo "NABS_DOMAIN=${DOMAIN}"
+    if [ "$DOMAIN" != "localhost" ]; then
+      echo "NABS_DOMAIN=${DOMAIN}"
+      # Let's Encrypt yalnızca herkese açık alan adlarına sertifika verir.
+      # İç alan adlarında Caddy kendi CA'sını kullanmalı, yoksa HTTPS hiç açılmaz.
+      case "$DOMAIN" in
+        *.local|*.lan|*.internal|*.intranet|*.corp|*.home|*.localdomain|*.test)
+          echo "NABS_TLS_MODE=tls internal" ;;
+        *) echo "NABS_TLS_MODE=" ;;
+      esac
+    fi
     if [ "$USE_VAULT" = "1" ]; then
       echo "# Bootstrap secret'ları Vault'ta (vault_init.sh yazar). Token aşağıya eklenecek."
       echo "VAULT_ADDR=http://nabs-vault:8200"
@@ -180,6 +189,17 @@ if [ "$OVERWRITE" = "1" ]; then
 else
   # mevcut .env; vault kullanılıyor mu tahmin et
   grep -q '^REDIS_PASSWORD=' .env && COMPOSE_FILES+=(-f docker-compose.prod.yml)
+  # NABS_TLS_MODE sonradan eklendi; eski .env'lerde eksik olabilir.
+  if grep -q '^NABS_DOMAIN=' .env && ! grep -q '^NABS_TLS_MODE=' .env; then
+    EXIST_DOMAIN=$(grep -m1 '^NABS_DOMAIN=' .env | cut -d= -f2-)
+    case "$EXIST_DOMAIN" in
+      *.local|*.lan|*.internal|*.intranet|*.corp|*.home|*.localdomain|*.test)
+        echo "NABS_TLS_MODE=tls internal" >> .env
+        warn "'$EXIST_DOMAIN' iç bir alan adı; Let's Encrypt buna sertifika veremez."
+        ok   "NABS_TLS_MODE='tls internal' .env'e eklendi (Caddy kendi CA'sını kullanacak)." ;;
+      *) echo "NABS_TLS_MODE=" >> .env ;;
+    esac
+  fi
   grep -q '^VAULT_ADDR=' .env && { USE_VAULT=1; COMPOSE_FILES+=(-f docker-compose.vault.yml); }
   grep -q '^NABS_DOMAIN=' .env && [ -f docker-compose.tls.yml ] && \
     yesno "TLS (Caddy) overlay'i kullanılsın mı?" "e" && COMPOSE_FILES+=(-f docker-compose.tls.yml)

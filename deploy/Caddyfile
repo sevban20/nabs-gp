@@ -4,8 +4,13 @@
 # iç ağ için 'tls internal' satırını açıp self-signed kullanın.
 
 {$NABS_DOMAIN} {
-    # İç ağ / FQDN yoksa self-signed sertifika:
-    # tls internal
+    # TLS modu NABS_TLS_MODE ile belirlenir (docker-compose.tls.yml → environment):
+    #   boş           → otomatik HTTPS (Let's Encrypt). Herkese açık FQDN + 80/443 şart.
+    #   tls internal  → Caddy'nin kendi CA'sı ile self-signed. İç alan adları
+    #                   (.local, .lan, .internal …) için TEK seçenek — Let's Encrypt
+    #                   bu adlara sertifika veremez.
+    # install.sh iç alan adı tespit ettiğinde bunu kendiliğinden 'tls internal' yapar.
+    {$NABS_TLS_MODE}
 
     encode gzip
 
