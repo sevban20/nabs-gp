@@ -35,6 +35,7 @@ services:
       - git_repository_storage:/var/nabs/git_repo
       - sftpgo_uploads:/var/nabs/sftpgo_uploads
       - tls_certs:/var/nabs/tls          # GUI'den yüklenen web sunucu sertifikası
+      - ./deploy/oui:/var/nabs/oui:ro   # IEEE OUI veritabani (scripts/fetch_oui.sh)
     # Host'ta çalışan Ollama'ya host.docker.internal ile erişim (Linux'ta gerekli;
     # Mac/Windows Docker Desktop'ta zaten çözülür ama zararsız).
     extra_hosts:
@@ -58,6 +59,7 @@ services:
     volumes:
       - git_repository_storage:/var/nabs/git_repo
       - sftpgo_uploads:/var/nabs/sftpgo_uploads
+      - ./deploy/oui:/var/nabs/oui:ro   # IEEE OUI veritabani (scripts/fetch_oui.sh)
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

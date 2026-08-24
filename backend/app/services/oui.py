@@ -40,6 +40,110 @@ OUI_MAP: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Harici OUI veritabanı
+#
+# Yukarıdaki gömülü tablo yalnızca ~50 ağ üreticisini kapsar; gerçek bir ağda
+# uç cihazların büyük kısmı bu listede yoktur ve 'unknown' görünür. IEEE kayıt
+# defterinde 50 binden fazla tahsis var. Dosya sağlanırsa buradan yüklenir,
+# gömülü tablo üzerine yazmaz (elle bakımlı isimler — "Cisco Meraki" gibi —
+# korunur, dosya yalnızca eksikleri doldurur).
+#
+# Kaynak dosya biçimlerinin üçü de desteklenir:
+#   IEEE oui.csv   : Registry,Assignment,Organization Name,Organization Address
+#   IEEE oui.txt   : "00-09-0F   (hex)  Fortinet, Inc."
+#   nmap / manuf   : "00090F Fortinet" ya da "00:09:0F<TAB>Fortinet"
+# ---------------------------------------------------------------------------
+import logging as _logging  # noqa: E402
+import os as _os  # noqa: E402
+
+_logger = _logging.getLogger("nabs.oui")
+OUI_FILE_PATH = _os.getenv("NABS_OUI_FILE", "/var/nabs/oui/oui.csv")
+_FILE_OUI: dict[str, str] | None = None   # None = henüz denenmedi
+
+
+def _parse_oui_stream(lines) -> dict[str, str]:
+    """Desteklenen üç biçimi de aynı ayrıştırıcıyla okur: satırdan ilk 6 hex
+    haneyi ve ardından gelen kurum adını çıkarır."""
+    out: dict[str, str] = {}
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        # IEEE CSV: MA-L,00090F,"Fortinet, Inc.",...
+        if line.upper().startswith(("MA-L,", "MA-M,", "MA-S,")):
+            parts = _csv_split(line)
+            if len(parts) >= 3:
+                pref = re.sub(r"[^0-9A-Fa-f]", "", parts[1]).upper()[:6]
+                name = parts[2].strip().strip('"')
+                if len(pref) == 6 and name:
+                    out[pref] = name
+            continue
+
+        # IEEE TXT: 00-09-0F   (hex)  Fortinet, Inc.
+        m = re.match(r"^([0-9A-Fa-f]{2}[-:]){2}[0-9A-Fa-f]{2}\s+\(hex\)\s+(.+)$", line)
+        if m:
+            pref = re.sub(r"[^0-9A-Fa-f]", "", line.split()[0]).upper()[:6]
+            out[pref] = m.group(2).strip()
+            continue
+
+        # nmap / manuf: 00090F Fortinet   |   00:09:0F<TAB>Fortinet
+        m = re.match(r"^([0-9A-Fa-f]{6}|(?:[0-9A-Fa-f]{2}[:-]){2}[0-9A-Fa-f]{2})\s+(.+)$",
+                     line)
+        if m:
+            pref = re.sub(r"[^0-9A-Fa-f]", "", m.group(1)).upper()[:6]
+            name = m.group(2).split("\t")[0].strip()
+            if len(pref) == 6 and name:
+                out[pref] = name
+    return out
+
+
+def _csv_split(line: str) -> list[str]:
+    """Tırnak içindeki virgülleri koruyan basit CSV bölmesi (kurum adlarında
+    'Fortinet, Inc.' gibi virgüller var)."""
+    import csv  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    return next(csv.reader(io.StringIO(line)))
+
+
+def load_oui_file(path: str | None = None) -> int:
+    """OUI dosyasını yükler, yüklenen kayıt sayısını döndürür. Dosya yoksa 0."""
+    global _FILE_OUI
+    target = path or OUI_FILE_PATH
+    try:
+        opener = open
+        if target.endswith(".gz"):
+            import gzip  # noqa: PLC0415
+            opener = gzip.open
+        with opener(target, "rt", encoding="utf-8", errors="ignore") as fh:
+            data = _parse_oui_stream(fh)
+    except FileNotFoundError:
+        _FILE_OUI = {}
+        _logger.warning(
+            "OUI veritabanı bulunamadı (%s). Gömülü tablo yalnızca %d üretici "
+            "içerir; uç cihazların çoğu 'unknown' görünecek. Doldurmak için: "
+            "./scripts/fetch_oui.sh", target, len(OUI_MAP))
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        _FILE_OUI = {}
+        _logger.error("OUI veritabanı okunamadı (%s): %s", target, exc)
+        return 0
+
+    _FILE_OUI = data
+    _logger.info("OUI veritabanı yüklendi: %d kayıt (%s)", len(data), target)
+    return len(data)
+
+
+def _lookup(oui: str) -> str | None:
+    """Önce elle bakımlı tablo, sonra harici dosya."""
+    if oui in OUI_MAP:
+        return OUI_MAP[oui]
+    if _FILE_OUI is None:
+        load_oui_file()
+    return (_FILE_OUI or {}).get(oui)
+
+
 def normalize_mac(mac: str) -> str | None:
     """Herhangi bir formattaki MAC'i 12 haneli büyük-harf hex'e çevirir.
     Geçersizse None. Kabul: 00aa.bbcc.ddee, 00:aa:.., 00-AA-.., ham hex."""
@@ -60,8 +164,11 @@ def vendor_from_mac(mac: str) -> str:
     oui = oui_of(mac)
     if not oui:
         return "unknown"
-    # İkinci nibble'ın en düşük biti 1 ise yerel yönetimli (rastgele) MAC
-    second = int(oui[1], 16)
-    if second & 0x2:
-        return OUI_MAP.get(oui, "locally-administered")
-    return OUI_MAP.get(oui, "unknown")
+    hit = _lookup(oui)
+    if hit:
+        return hit
+    # İkinci nibble'ın en düşük biti 1 ise yerel yönetimli (rastgele) MAC —
+    # bu adresler hiçbir üreticiye tahsis edilmez, 'unknown' demek yanıltıcı olur.
+    if int(oui[1], 16) & 0x2:
+        return "locally-administered"
+    return "unknown"

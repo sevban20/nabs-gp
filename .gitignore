@@ -17,3 +17,6 @@ vault-init.secret
 
 # build artefaktları
 *.zip
+
+# IEEE OUI veritabani (scripts/fetch_oui.sh ile indirilir, repoda tutulmaz)
+deploy/oui/oui.*
