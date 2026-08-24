@@ -8,6 +8,23 @@
 #   # .env'de VAULT_ADDR/VAULT_TOKEN'ı ayarlayıp tüm stack'i başlatın:
 #   docker compose -f docker-compose.yml -f docker-compose.vault.yml up -d
 services:
+  # Tek seferlik hazırlık: raft veri dizininin sahipliğini düzeltir.
+  # Vault konteyner içinde root olmayan 'vault' kullanıcısı olarak çalışır; yeni
+  # bir Docker volume'ü ise root'a ait oluşturulur. İmaj /vault/file ve
+  # /vault/logs'u hazırlar ama raft'ın kullandığı /vault/data'yı hazırlamaz;
+  # düzeltilmezse Vault "open /vault/data/vault.db: permission denied" ile çıkar
+  # ve sonsuz restart döngüsüne girer.
+  # Aynı imaj kullanılıyor ki 'vault' kullanıcısının uid'i ne olursa olsun doğru
+  # çözümlensin ve fazladan imaj indirilmesin.
+  nabs-vault-init:
+    image: hashicorp/vault:1.17
+    container_name: nabs-vault-init
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /vault/data && chown -R vault:vault /vault/data && chmod 700 /vault/data && echo 'vault veri dizini hazir'"]
+    volumes:
+      - vault_data:/vault/data
+    restart: "no"
+
   nabs-vault:
     image: hashicorp/vault:1.17
     container_name: nabs-vault
@@ -20,8 +37,11 @@ services:
       - vault_data:/vault/data
       - ./deploy/vault/config.hcl:/vault/config/config.hcl:ro
     ports:
-      - "8200:8200"
+      - "127.0.0.1:8200:8200"   # yalnızca host içi; Vault dışarıya açılmaz
     restart: unless-stopped
+    depends_on:
+      nabs-vault-init:
+        condition: service_completed_successfully
     healthcheck:
       # vault status çıkış kodları: 0 = unsealed, 2 = sealed, 1 = erişilemiyor.
       # 0 ve 2 "ayakta" sayılır (sealed Vault da ayaktadır, sadece kilitlidir).

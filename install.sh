@@ -189,7 +189,41 @@ fi
 if [ "$USE_VAULT" = "1" ]; then
   echo; say "Gömülü Vault başlatılıyor"
   $DC "${COMPOSE_FILES[@]}" up -d nabs-vault
-  sleep 3
+
+  # Vault gerçekten ayağa kalkana kadar bekle. 'vault status' çıkış kodları:
+  # 0 = unsealed, 2 = sealed, 1 = erişilemiyor. 0/2 "hazır" demektir.
+  say "Vault'un hazır olması bekleniyor"
+  VAULT_READY=0
+  for i in $(seq 1 30); do
+    STATE=$(docker inspect -f '{{.State.Status}}' nabs-vault 2>/dev/null || echo "yok")
+    if [ "$STATE" = "restarting" ] || [ "$STATE" = "exited" ]; then
+      break
+    fi
+    docker exec -e VAULT_ADDR=http://127.0.0.1:8200 nabs-vault vault status >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" = "0" ] || [ "$rc" = "2" ]; then VAULT_READY=1; ok "Vault hazır"; break; fi
+    sleep 2
+  done
+
+  if [ "$VAULT_READY" != "1" ]; then
+    echo
+    warn "Vault ayağa kalkmadı (durum: ${STATE:-bilinmiyor}). Konteyner logunun son 30 satırı:"
+    echo "${D}------------------------------------------------------------${N}"
+    docker logs --tail 30 nabs-vault 2>&1 | sed 's/^/    /'
+    echo "${D}------------------------------------------------------------${N}"
+    echo
+    warn "En sık sebep: raft veri dizininin (/vault/data) sahipliği. Vault konteyner"
+    warn "içinde 'vault' kullanıcısı (uid 100) olarak çalışır; yeni Docker volume'ü"
+    warn "root'a ait oluşturulursa raft dizinini açamaz. Düzeltme:"
+    VOL=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/vault/data"}}{{.Name}}{{end}}{{end}}' nabs-vault 2>/dev/null)
+    [ -z "$VOL" ] && VOL="<proje>_vault_data   # 'docker volume ls' ile bulun"
+    echo "    docker run --rm -v ${VOL}:/data alpine chown -R 100:1000 /data"
+    echo "    $DC ${COMPOSE_FILES[*]} up -d nabs-vault"
+    echo
+    warn "Sonra bu betiği tekrar çalıştırın (.env'i koruyarak)."
+    die "Vault hazır olmadan devam edilemez."
+  fi
+
   say "Vault init + unseal + secret yazma (scripts/vault_init.sh)"
   ./scripts/vault_init.sh
   APP_TOKEN=$(grep -m1 'App Token' vault-init.secret 2>/dev/null | awk '{print $NF}' || true)
