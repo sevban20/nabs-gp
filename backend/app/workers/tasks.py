@@ -186,7 +186,12 @@ def run_discovery_scan(cidr: str, snmp_community: str = "public") -> list[dict]:
 # veriyor. Desen genişletildi: harf/rakam dışında @ : / ~ ( ) [ ] boşluk ve
 # nokta/tire de kabul ediliyor, satır sonundaki #, $ veya > ile bitmesi şartıyla.
 # Cihazınız yine de uymuyorsa NABS_FORTINET_PROMPT ile kendi desenini verin.
-_DEFAULT_FORTINET_PROMPT = r"(?im)^[\w.\-@:/~\[\]() ]{1,64}[#$>]\s*$"
+# Gerçek sahadan doğrulanmış biçimler: "ALTS~ #", "FGT60F #", "FGT (root) #",
+# "admin@FSW #", "FSW-01:~ #". Konfigürasyon çıktısındaki satırlara yanlış
+# eşleşmemesi için olabildiğince dar tutuldu.
+_DEFAULT_FORTINET_PROMPT = (
+    r"(?im)^[\w.\-~@]+(:[\w.\-/~]+)?\s?(\([\w.\- ]+\))?\s?[#$>]\s*$"
+)
 import os as _os2  # noqa: E402
 FORTINET_PROMPT_PATTERN = _os2.getenv("NABS_FORTINET_PROMPT") or _DEFAULT_FORTINET_PROMPT
 
@@ -208,6 +213,20 @@ _NETWORK_VENDORS = {
     "cisco_ios", "fortinet", "fortiswitch", "paloalto", "juniper_junos",
     "huawei_vrp", "aruba_aoscx", "aruba_procurve", "mikrotik",
 }
+
+
+def _warn_if_unparsed(what: str, host: str, vendor: str, raw: str, rows: list) -> None:
+    """Komut çıktı verdi ama ayrıştırıcı hiçbir satır üretemediyse, ham çıktının
+    başını logla. Sessizce boş dönmek bu projede saatlerce zaman kaybettirdi:
+    operatör 'çalışmıyor' görür, log ise neden olduğunu söylemez."""
+    if rows or not (raw or "").strip():
+        return
+    sample = "\n".join((raw or "").splitlines()[:15])
+    logger.warning(
+        "%s ayrıştırılamadı (%s, vendor=%s): komut çıktı verdi ama tanınan bir "
+        "satır bulunamadı. Ham çıktının ilk satırları:\n%s",
+        what, host, vendor, sample,
+    )
 
 
 def _tcp22_hint(host: str, vendor: str | None = None) -> str:
@@ -366,7 +385,7 @@ def collect_l2_inventory(asset_id: int) -> dict:
     from app.core.database import SessionLocal
     from app.models.models import Asset, Credential, DiscoveredHost
     from app.services.topology import (
-        merge_l2_inventory, parse_arp_table, parse_mac_address_table)
+        merge_l2_inventory, parse_arp_any, parse_mac_any)
 
     db = SessionLocal()
     try:
@@ -381,8 +400,11 @@ def collect_l2_inventory(asset_id: int) -> dict:
             enable_secret=crypto.decrypt(cred.secret_encrypted) if cred.secret_encrypted else None,
             vendor=asset.vendor)
 
-        hosts = merge_l2_inventory(parse_arp_table(arp_out),
-                                   parse_mac_address_table(mac_out), asset.hostname)
+        arp_rows = parse_arp_any(arp_out)
+        mac_rows = parse_mac_any(mac_out)
+        _warn_if_unparsed("ARP tablosu", asset.ip_address, asset.vendor, arp_out, arp_rows)
+        _warn_if_unparsed("MAC tablosu", asset.ip_address, asset.vendor, mac_out, mac_rows)
+        hosts = merge_l2_inventory(arp_rows, mac_rows, asset.hostname)
         managed_ips = {ip for (ip,) in db.query(Asset.ip_address).all()}
         upserts = 0
         for h in hosts:
@@ -440,7 +462,7 @@ def collect_topology(asset_id: int) -> dict:
     from app.core.crypto import get_crypto
     from app.core.database import SessionLocal
     from app.models.models import Asset, Credential, TopologyLink
-    from app.services.topology import parse_cdp_detail, parse_lldp_detail
+    from app.services.topology import parse_neighbors_any
 
     db = SessionLocal()
     try:
@@ -455,7 +477,9 @@ def collect_topology(asset_id: int) -> dict:
             enable_secret=crypto.decrypt(cred.secret_encrypted) if cred.secret_encrypted else None,
             vendor=asset.vendor)
 
-        neighbors = parse_cdp_detail(output) + parse_lldp_detail(output)
+        neighbors = parse_neighbors_any(output)
+        _warn_if_unparsed("LLDP/CDP komşulukları", asset.ip_address, asset.vendor,
+                          output, neighbors)
         # Bu kaynak için eski link'leri temizle, yenilerini yaz
         db.query(TopologyLink).filter(
             TopologyLink.source_device == asset.hostname).delete()

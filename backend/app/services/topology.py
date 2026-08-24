@@ -13,8 +13,11 @@ import re
 # Komşuluk komut matrisi (read-only)
 NEIGHBOR_COMMANDS = {
     "cisco_ios": ["show cdp neighbors detail", "show lldp neighbors detail"],
-    "fortinet": ["get system lldp neighbors"],
-    "fortiswitch": ["get switch lldp neighbors-summary"],
+    # FortiSwitchOS: 'neighbors-detail' komşu başına tam kayıt verir
+    # (sistem adı, port, yönetim IP'si). 'summary' yedek olarak denenir.
+    "fortinet": ["get system lldp neighbors", "get switch lldp neighbors-detail"],
+    "fortiswitch": ["get switch lldp neighbors-detail",
+                    "get switch lldp neighbors-summary"],
     "juniper_junos": ["show lldp neighbors"],
     "paloalto": ["show lldp neighbors all"],
     "huawei_vrp": ["display lldp neighbor brief", "display lldp neighbor"],
@@ -77,6 +80,171 @@ def parse_lldp_detail(output: str) -> list[dict]:
                 "protocol": "LLDP",
             })
     return neighbors
+
+
+def parse_fortinet_lldp(output: str) -> list[dict]:
+    """FortiSwitchOS/FortiOS LLDP çıktısını ayrıştırır.
+
+    Cisco ayrıştırıcıları bu formatı görmez: FortiSwitch 'Local Intf:' değil
+    port başlığı, 'Port id:' değil 'Port ID:' yazar. Etiket yazımı sürümden
+    sürüme değiştiği için satır bazlı ve toleranslı ilerler; blok sonunda
+    en az bir sistem adı ya da uzak port bulunmuşsa komşu üretir.
+
+    Beklenen biçim (yaklaşık):
+        Neighbor on port port5:
+            Chassis ID        : 00:09:0f:aa:bb:cc
+            System Name       : SW-CORE-01
+            Port ID           : gi1/0/24
+            Management IP     : 10.10.10.1
+    """
+    neighbors: list[dict] = []
+    cur: dict = {}
+    local_if: str | None = None
+
+    def flush() -> None:
+        nonlocal cur
+        if cur.get("remote_device") or cur.get("remote_interface"):
+            neighbors.append({
+                "remote_device": (cur.get("remote_device") or "unknown").split(".")[0],
+                "remote_ip": cur.get("remote_ip"),
+                "local_interface": cur.get("local_interface") or local_if,
+                "remote_interface": cur.get("remote_interface"),
+                "platform": cur.get("platform"),
+                "protocol": "LLDP",
+            })
+        cur = {}
+
+    # "Neighbor on port port5:" / "port5:" / "Interface: port5" → yerel port
+    re_local = re.compile(
+        r"(?i)^\s*(?:neighbors?\s+(?:on|for)\s+(?:local\s+)?(?:port|interface)\s+|"
+        r"(?:local\s+)?(?:port|interface)\s*[:=]\s*)([\w/.\-]+)")
+    re_local_bare = re.compile(r"(?i)^\s*([\w/.\-]+)\s*:\s*$")
+    re_kv = re.compile(r"(?i)^\s*([A-Za-z][A-Za-z0-9 _/\-]*?)\s*[:=]\s*(.+?)\s*$")
+
+    for raw in output.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+
+        m = re_local.match(line)
+        if m:
+            flush()
+            local_if = m.group(1)
+            continue
+        m = re_local_bare.match(line)
+        if m and not re_kv.match(line):
+            flush()
+            local_if = m.group(1)
+            continue
+        if re.match(r"(?i)^\s*neighbor(\s+\d+)?\s*[:.]?\s*$", line):
+            flush()
+            continue
+
+        m = re_kv.match(line)
+        if not m:
+            continue
+        key = re.sub(r"\s+", " ", m.group(1)).strip().lower()
+        val = m.group(2).strip().strip('"')
+        if not val or val in ("N/A", "-"):
+            continue
+
+        if key.startswith("system name") or key in ("device id", "neighbor name"):
+            flush_pending = cur.get("remote_device")
+            if flush_pending:      # yeni komşu başlıyor
+                flush()
+            cur["remote_device"] = val
+        elif key.startswith("port id") or key in ("neighbor port", "remote port"):
+            cur["remote_interface"] = val
+        elif key.startswith("port desc") and not cur.get("remote_interface"):
+            cur["remote_interface"] = val
+        elif key.startswith("system desc") or key == "platform":
+            cur["platform"] = val[:120]
+        elif ("management" in key and ("ip" in key or "address" in key)) or key == "mgmt ip":
+            ipm = re.search(r"\d{1,3}(?:\.\d{1,3}){3}", val)
+            if ipm:
+                cur["remote_ip"] = ipm.group(0)
+        elif key in ("local port", "local interface", "local intf"):
+            cur["local_interface"] = val
+
+    flush()
+    return neighbors
+
+
+def parse_fortinet_arp(output: str) -> list[dict]:
+    """FortiOS/FortiSwitchOS 'get system arp' -> (ip, mac).
+
+    Biçim:  Address        Age(min)   Hardware Addr        Interface
+            10.0.0.1       0          00:09:0f:aa:bb:cc    internal
+    Cisco ayrıştırıcısı satırda 'Internet' kelimesi aradığı için bunu göremez.
+    """
+    entries = []
+    for line in output.splitlines():
+        m = re.match(
+            r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+\S+\s+"
+            r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\b", line)
+        if m:
+            entries.append({"ip_address": m.group(1), "mac": m.group(2)})
+    return entries
+
+
+def parse_fortiswitch_mac_table(output: str) -> list[dict]:
+    """FortiSwitchOS 'diagnose switch mac-address list' -> (vlan, mac, port).
+
+    Biçim (yaklaşık):
+        MAC: 00:09:0f:11:22:33   VLAN: 10   Port: port5   Flags: ... [dynamic]
+    Alan sırası sürüme göre değişebildiği için etiketler tek tek aranır.
+    """
+    entries = []
+    for line in output.splitlines():
+        mac = re.search(r"(?i)\bMAC\s*[:=]\s*([0-9a-f]{2}(?::[0-9a-f]{2}){5})", line)
+        if not mac:
+            continue
+        vlan = re.search(r"(?i)\bVLAN\s*[:=]\s*(\d+)", line)
+        port = re.search(r"(?i)\b(?:port|interface)\s*[:=]\s*([\w/.\-]+)", line)
+        typ = "STATIC" if re.search(r"(?i)static", line) else "DYNAMIC"
+        entries.append({
+            "vlan": vlan.group(1) if vlan else None,
+            "mac": mac.group(1),
+            "type": typ,
+            "interface": port.group(1) if port else None,
+        })
+    return entries
+
+
+def parse_neighbors_any(output: str) -> list[dict]:
+    """Vendor formatını bilmeden komşu ayrıştırır: bilinen tüm ayrıştırıcıları
+    dener, sonuç veren(ler)i birleştirir. Vendor etiketi yanlış girilmiş
+    cihazlarda da çalışır."""
+    result: list[dict] = []
+    for fn in (parse_cdp_detail, parse_lldp_detail, parse_fortinet_lldp):
+        try:
+            result.extend(fn(output))
+        except Exception:  # noqa: BLE001 - bir ayrıştırıcı diğerini engellemesin
+            continue
+    seen, uniq = set(), []
+    for n in result:
+        key = (n.get("remote_device"), n.get("local_interface"), n.get("remote_interface"))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(n)
+    return uniq
+
+
+def parse_arp_any(output: str) -> list[dict]:
+    """ARP çıktısını Cisco ve Fortinet biçimlerinin ikisine karşı da dener."""
+    entries = parse_arp_table(output)
+    if not entries:
+        entries = parse_fortinet_arp(output)
+    return entries
+
+
+def parse_mac_any(output: str) -> list[dict]:
+    """MAC tablosunu Cisco ve FortiSwitch biçimlerinin ikisine karşı da dener."""
+    entries = parse_mac_address_table(output)
+    if not entries:
+        entries = parse_fortiswitch_mac_table(output)
+    return entries
 
 
 def parse_arp_table(output: str) -> list[dict]:
