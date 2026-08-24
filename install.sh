@@ -259,15 +259,45 @@ if [ "$USE_VAULT" = "1" ]; then
   fi
 
   say "Vault init + unseal + secret yazma (scripts/vault_init.sh)"
-  ./scripts/vault_init.sh
-  APP_TOKEN=$(grep -m1 'App Token' vault-init.secret 2>/dev/null | awk '{print $NF}' || true)
-  if [ -n "${APP_TOKEN:-}" ]; then
-    grep -q '^VAULT_TOKEN=' .env && sed -i.bak "s|^VAULT_TOKEN=.*|VAULT_TOKEN=${APP_TOKEN}|" .env \
-      || echo "VAULT_TOKEN=${APP_TOKEN}" >> .env
-    rm -f .env.bak
-    ok "VAULT_TOKEN .env'e yazıldı"
+  if ./scripts/vault_init.sh; then
+    APP_TOKEN=$(grep -m1 'App Token' vault-init.secret 2>/dev/null | awk '{print $NF}' || true)
+    if [ -n "${APP_TOKEN:-}" ]; then
+      grep -q '^VAULT_TOKEN=' .env && sed -i.bak "s|^VAULT_TOKEN=.*|VAULT_TOKEN=${APP_TOKEN}|" .env \
+        || echo "VAULT_TOKEN=${APP_TOKEN}" >> .env
+      rm -f .env.bak
+      ok "VAULT_TOKEN .env'e yazıldı"
+    else
+      warn "App token otomatik alınamadı. vault-init.secret'tan VAULT_TOKEN'ı .env'e elle ekleyin."
+    fi
   else
-    warn "App token otomatik alınamadı. vault-init.secret'tan VAULT_TOKEN'ı .env'e elle ekleyin."
+    echo
+    warn "Vault ilk kurulumu tamamlanamadı (yukarıdaki hataya bakın)."
+    warn "Gömülü Vault opsiyoneldir; secret'lar .env dosyasında da tutulabilir."
+    warn "Bu, platformun geri kalanını (yedekleme, keşif, GUI) hiçbir şekilde kısıtlamaz."
+    if yesno "Secret'ları .env'de tutup kuruluma devam edilsin mi? (Vault'u sonra ekleyebilirsiniz)" "e"; then
+      sed -i.bak '/^VAULT_/d' .env && rm -f .env.bak
+      {
+        echo "NABS_MASTER_KEY=$(gen)"
+        echo "JWT_SECRET=$(gentok)"
+        echo "SFTPGO_WEBHOOK_SECRET=$(gentok)"
+      } >> .env
+      # vault overlay'ini ve konteynerlerini devre dışı bırak
+      NEWF=()
+      for f in "${COMPOSE_FILES[@]}"; do
+        if [ "$f" = "docker-compose.vault.yml" ]; then
+          unset "NEWF[$(( ${#NEWF[@]} - 1 ))]"   # eşleşen -f'i de at
+          continue
+        fi
+        NEWF+=("$f")
+      done
+      COMPOSE_FILES=("${NEWF[@]}")
+      docker rm -f nabs-vault nabs-vault-init >/dev/null 2>&1 || true
+      USE_VAULT=0
+      ok "Secret'lar .env'e üretildi (0600); Vault devre dışı bırakıldı."
+      warn "Üretime çıkarken Vault'a geçmeyi planlayın: docs/PRODUCTION_INSTALL.md Bölüm 6.2"
+    else
+      die "Vault kurulumu tamamlanmadan devam edilemez."
+    fi
   fi
 fi
 
