@@ -54,11 +54,61 @@ import os as _os  # noqa: E402
 SSH_CONFIG_FILE = _os.getenv("NABS_SSH_CONFIG", "/srv/nabs/ssh_config")
 
 
+# ssh_config'in geçerliliği dosya yoluna göre bir kez ölçülüp önbelleklenir.
+# (Yol anahtarlı; testlerde ve yol değiştiğinde yeniden ölçülsün diye.)
+_SSH_CONFIG_OK: dict[str, bool] = {}
+
+
+def _ssh_config_usable() -> bool:
+    """ssh_config'i 'ssh -G' ile doğrular.
+
+    Neden: dosyada ssh'ın tanımadığı TEK bir seçenek olması (ör. OpenSSH < 8.5'te
+    'PubkeyAcceptedAlgorithms') ssh'ı komple reddettirir ve HER cihaz bağlantısı
+    'Bad configuration option' ile düşer. Bu durumda sessizce kilitlenmek yerine
+    hatayı loglayıp sistem varsayılanına dönüyoruz: modern cihazlar çalışmaya
+    devam eder, yalnızca legacy kripto gerektirenler etkilenir.
+    """
+    path = SSH_CONFIG_FILE
+    if path in _SSH_CONFIG_OK:
+        return _SSH_CONFIG_OK[path]
+
+    if not _os.path.exists(path):
+        logger.warning("SSH config %s yok; sistem varsayılanı kullanılacak. Eski "
+                       "Huawei/Fortinet cihazları legacy algoritma hatası verebilir.",
+                       path)
+        _SSH_CONFIG_OK[path] = False
+        return False
+
+    import subprocess  # noqa: PLC0415
+    try:
+        proc = subprocess.run(
+            ["ssh", "-G", "-F", path, "nabs-config-probe"],
+            capture_output=True, timeout=10, check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("SSH config doğrulanamadı (%s): %s", path, exc)
+        _SSH_CONFIG_OK[path] = False
+        return False
+
+    if proc.returncode == 0:
+        _SSH_CONFIG_OK[path] = True
+        return True
+
+    logger.error(
+        "SSH config GEÇERSİZ, sistem varsayılanına dönülüyor. Dosya: %s — ssh'ın "
+        "yanıtı: %s", path,
+        proc.stderr.decode("utf-8", errors="ignore").strip()[:500] or "(boş)",
+    )
+    _SSH_CONFIG_OK[path] = False
+    return False
+
+
 def _scrapli_ssh_kwargs() -> dict:
     """Tüm Scrapli/GenericDriver çağrılarında ortak: legacy-uyumlu ssh config
-    ve strict-key kapalı. Config dosyası yoksa sistem varsayılanına düşer."""
+    ve strict-key kapalı. Config yoksa ya da ssh onu reddediyorsa sistem
+    varsayılanına düşer (bkz. _ssh_config_usable)."""
     kw = {"auth_strict_key": False, "ssh_config_file": True}
-    if _os.path.exists(SSH_CONFIG_FILE):
+    if _ssh_config_usable():
         kw["ssh_config_file"] = SSH_CONFIG_FILE
     return kw
 
@@ -126,17 +176,68 @@ def run_discovery_scan(cidr: str, snmp_community: str = "public") -> list[dict]:
     return scan_network(cidr, snmp_community)
 
 
-def _collect_neighbors_over_ssh(host, username, password, enable_secret, vendor):
-    """Cihazdan LLDP/CDP komşu çıktısını çeker (read-only). Test için ayrık."""
+# Fortinet ailesi prompt'u: "FGT60F # ", "FGT (root) # ", "FSW > " …
+FORTINET_PROMPT_PATTERN = r"(?im)^[\w.\-]+\s*(\([\w.\-]+\))?\s*[#$>]\s*$"
+
+
+def _disable_paging_generic(conn) -> None:
+    """FortiGate/FortiSwitch'te sayfalamayı (--More--) kapatmayı dener.
+    Desteklenmiyorsa sessizce geçilir; hiçbir yapılandırma yazılmaz kalıcı olarak."""
+    for pre in ("config system console", "set output standard", "end"):
+        try:
+            conn.send_command(pre)
+        except Exception:  # noqa: BLE001
+            break
+
+
+def _open_device_conn(host, username, password, enable_secret, vendor,
+                      timeout_ops: int = 60):
+    """Vendor'a göre DOĞRU sürücüyle açılmış bir bağlantı döndürür.
+
+    Fortinet ailesinin scrapli'de ağ sürücüsü yoktur; GenericDriver ile açılması
+    gerekir. Aksi halde varsayılan 'cisco_iosxe' sürücüsü seçilir, Cisco prompt'u
+    beklenir ve bağlantı 'timed out reading from transport' ile düşer.
+    Bu yardımcı, yedekleme / topoloji / L2 yollarının hepsinde aynı yönlendirmeyi
+    kullanmalarını sağlar.
+    """
+    if vendor in GENERIC_VENDORS:
+        from scrapli.driver import GenericDriver
+
+        conn = GenericDriver(
+            host=host, auth_username=username, auth_password=password,
+            timeout_socket=30, timeout_ops=max(timeout_ops, 90),
+            comms_prompt_pattern=FORTINET_PROMPT_PATTERN,
+            **_scrapli_ssh_kwargs(),
+        )
+        conn.open()
+        _disable_paging_generic(conn)
+        return conn
+
     from scrapli import Scrapli
 
+    kwargs = dict(
+        host=host, auth_username=username, auth_password=password,
+        platform=SCRAPLI_PLATFORM_MAP.get(vendor, "cisco_iosxe"),
+        timeout_socket=30, timeout_ops=timeout_ops, **_scrapli_ssh_kwargs(),
+    )
+    # auth_secondary yalnızca "enable" kavramı olan ağ sürücülerinde vardır;
+    # bazı community platformları (ör. mikrotik) reddeder.
+    if enable_secret:
+        kwargs["auth_secondary"] = enable_secret
+    try:
+        conn = Scrapli(**kwargs)
+    except TypeError:
+        kwargs.pop("auth_secondary", None)
+        conn = Scrapli(**kwargs)
+    conn.open()
+    return conn
+
+
+def _collect_neighbors_over_ssh(host, username, password, enable_secret, vendor):
+    """Cihazdan LLDP/CDP komşu çıktısını çeker (read-only). Test için ayrık."""
     from app.services.topology import NEIGHBOR_COMMANDS
 
-    conn = Scrapli(host=host, auth_username=username, auth_password=password,
-                   auth_secondary=enable_secret or "",
-                   platform=SCRAPLI_PLATFORM_MAP.get(vendor, "cisco_iosxe"),
-                   timeout_socket=30, timeout_ops=60, **_scrapli_ssh_kwargs())
-    conn.open()
+    conn = _open_device_conn(host, username, password, enable_secret, vendor)
     try:
         outputs = []
         for cmd in NEIGHBOR_COMMANDS.get(vendor, []):
@@ -154,29 +255,31 @@ L2_COMMANDS = {
     "cisco_ios": {"arp": "show ip arp", "mac": "show mac address-table"},
     "aruba_aoscx": {"arp": "show arp", "mac": "show mac-address"},
     "huawei_vrp": {"arp": "display arp", "mac": "display mac-address"},
+    # Fortinet ailesi (FortiOS / FortiSwitchOS) — hepsi read-only.
+    # FortiGate bir switch değildir; MAC tablosu komutu yoktur, boş bırakılır.
+    "fortinet": {"arp": "get system arp", "mac": ""},
+    "fortiswitch": {"arp": "get system arp", "mac": "diagnose switch mac-address list"},
 }
 
 
 def _collect_l2_over_ssh(host, username, password, enable_secret, vendor):
     """Cihazdan ARP ve MAC tablosu çıktısını çeker (read-only). Test için ayrık."""
-    from scrapli import Scrapli
-
     cmds = L2_COMMANDS.get(vendor, L2_COMMANDS["cisco_ios"])
-    conn = Scrapli(host=host, auth_username=username, auth_password=password,
-                   auth_secondary=enable_secret or "",
-                   platform=SCRAPLI_PLATFORM_MAP.get(vendor, "cisco_iosxe"),
-                   timeout_socket=30, timeout_ops=60, **_scrapli_ssh_kwargs())
-    conn.open()
+    conn = _open_device_conn(host, username, password, enable_secret, vendor)
     try:
         arp = mac = ""
-        try:
-            arp = conn.send_command(cmds["arp"]).result
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            mac = conn.send_command(cmds["mac"]).result
-        except Exception:  # noqa: BLE001
-            pass
+        for key in ("arp", "mac"):
+            cmd = cmds.get(key) or ""
+            if not cmd:            # o platformda karşılığı yok (ör. FortiGate MAC)
+                continue
+            try:
+                out = conn.send_command(cmd).result
+            except Exception:  # noqa: BLE001 - komut desteklenmeyebilir
+                continue
+            if key == "arp":
+                arp = out
+            else:
+                mac = out
         return arp, mac
     finally:
         conn.close()
@@ -609,26 +712,12 @@ def _fetch_config_over_ssh(host: str, username: str, password: str,
 
 def _fetch_generic_config(host: str, username: str, password: str, command: str) -> str:
     """Fortinet ailesi gibi, scrapli ağ platformu olmayan cihazlar için
-    GenericDriver ile ham komut çalıştırma. Fortinet'te sayfalama (--More--)
-    olmasın diye önce 'config system console / set output standard' denenir;
-    desteklenmezse yok sayılır."""
-    from scrapli.driver import GenericDriver
-
-    conn = GenericDriver(
-        host=host, auth_username=username, auth_password=password,
-        timeout_socket=30, timeout_ops=90,
-        # Fortinet prompt'u: "hostname #", "hostname (global) #", "> " …
-        comms_prompt_pattern=r"(?im)^[\w.\-]+\s*(\([\w.\-]+\))?\s*[#$>]\s*$",
-        **_scrapli_ssh_kwargs(),
-    )
-    conn.open()
+    GenericDriver ile ham komut çalıştırma. Bağlantı açma, prompt deseni ve
+    sayfalama kapatma _open_device_conn içinde ortaklaştırılmıştır — böylece
+    yedekleme, topoloji ve L2 yolları aynı davranışı paylaşır."""
+    conn = _open_device_conn(host, username, password, None, "fortinet",
+                             timeout_ops=90)
     try:
-        # sayfalamayı kapat (FortiGate/FortiSwitch); desteklenmezse sessiz geç
-        for pre in ("config system console", "set output standard", "end"):
-            try:
-                conn.send_command(pre)
-            except Exception:  # noqa: BLE001
-                break
         return conn.send_command(command).result
     finally:
         conn.close()
