@@ -20,4 +20,8 @@ RUN useradd --create-home --uid 10001 appuser \
 USER appuser
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers: gerçek istemci IP'si X-Forwarded-For'dan okunur (login
+# rate-limit ve audit source_ip doğru olsun diye). 8000 yalnızca 127.0.0.1'e
+# ve docker ağına açık olduğundan forwarded-allow-ips=* güvenlidir.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--proxy-headers", "--forwarded-allow-ips", "*"]

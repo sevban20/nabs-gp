@@ -4,6 +4,10 @@
 # katmanında AES-256-GCM şifreli kalır (yeni düz-metin ifşa noktası oluşmaz).
 set -euo pipefail
 
+# Cron'dan çalıştırıldığında ortam değişkeni olmaz; .env'i buradan yükle.
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -f "$PROJECT_DIR/.env" ]; then set -a; . "$PROJECT_DIR/.env"; set +a; fi
+
 BACKUP_DIR="${BACKUP_DIR:-/var/nabs/db_backups}"
 RETENTION_DAYS="${DB_BACKUP_RETENTION_DAYS:-14}"
 STAMP="$(date +%Y%m%d_%H%M%S)"

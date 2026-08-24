@@ -1,0 +1,64 @@
+# Üretim sertleştirme overlay'i.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#                  -f docker-compose.tls.yml up -d
+#
+# Yaptıkları:
+#   - Redis'e parola zorunluluğu (REDIS_PASSWORD .env'de tanımlı olmalı;
+#     REDIS_URL de redis://:<parola>@nabs-redis:6379/0 biçiminde olmalı)
+#   - Tüm servislerde log rotasyonu (diski doldurmasın)
+#   - Konteyner kaynak tavanları
+#
+# Not: port yayınları ana docker-compose.yml'de zaten 127.0.0.1'e bağlıdır;
+# dışarıya yalnızca Caddy'nin 80/443'ü ve SFTPGo'nun 2022'si açıktır.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  nabs-db:
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { memory: 2g }
+
+  nabs-redis:
+    # Parolasız broker'a izin verme; değişken yoksa compose hata verip durur.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD .env icinde tanimli olmali}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD .env icinde tanimli olmali}"
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { memory: 512m }
+
+  nabs-core-api:
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { memory: 2g }
+
+  celery-worker-high:
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { memory: 3g }
+
+  celery-beat:
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { memory: 512m }
+
+  nabs-dashboard:
+    logging: *default-logging
+
+  sftpgo:
+    logging: *default-logging

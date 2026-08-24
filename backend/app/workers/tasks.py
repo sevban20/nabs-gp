@@ -585,12 +585,21 @@ def _fetch_config_over_ssh(host: str, username: str, password: str,
 
     from scrapli import Scrapli
 
-    conn = Scrapli(
+    kwargs = dict(
         host=host, auth_username=username, auth_password=password,
-        auth_secondary=enable_secret or "",
         platform=SCRAPLI_PLATFORM_MAP.get(vendor, "cisco_iosxe"),
         timeout_socket=30, timeout_ops=60, **_scrapli_ssh_kwargs(),
     )
+    # auth_secondary yalnızca "enable" kavramı olan ağ sürücülerinde vardır.
+    # Bazı community platformları (ör. mikrotik_routeros) GenericDriver tabanlıdır
+    # ve bu argümanı reddeder (TypeError) — o durumda argümansız kur.
+    if enable_secret:
+        kwargs["auth_secondary"] = enable_secret
+    try:
+        conn = Scrapli(**kwargs)
+    except TypeError:
+        kwargs.pop("auth_secondary", None)
+        conn = Scrapli(**kwargs)
     conn.open()
     try:
         return conn.send_command(command).result

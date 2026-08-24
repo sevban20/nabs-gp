@@ -2,11 +2,12 @@ services:
   nabs-db:
     image: postgres:16-alpine
     container_name: nabs-postgres
+    restart: unless-stopped
     env_file: .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:5432:5432"]   # yalnızca host içi; dışarıya açma
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -16,7 +17,8 @@ services:
   nabs-redis:
     image: redis:7-alpine
     container_name: nabs-redis
-    ports: ["6379:6379"]
+    restart: unless-stopped
+    ports: ["127.0.0.1:6379:6379"]   # yalnızca host içi; dışarıya açma
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -26,8 +28,9 @@ services:
   nabs-core-api:
     build: { context: ./backend, dockerfile: Dockerfile }
     container_name: nabs-api
+    restart: unless-stopped
     env_file: .env
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]   # dışarıya Caddy (443) üzerinden çıkılır
     volumes:
       - git_repository_storage:/var/nabs/git_repo
       - sftpgo_uploads:/var/nabs/sftpgo_uploads
@@ -36,6 +39,12 @@ services:
     # Mac/Windows Docker Desktop'ta zaten çözülür ama zararsız).
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       nabs-db: { condition: service_healthy }
       nabs-redis: { condition: service_healthy }
@@ -43,6 +52,7 @@ services:
   celery-worker-high:
     build: { context: ./backend, dockerfile: Dockerfile }
     container_name: celery-worker-high
+    restart: unless-stopped
     command: celery -A app.workers.celery_app worker --loglevel=info -Q high-priority,default -c 4
     env_file: .env
     volumes:
@@ -50,25 +60,35 @@ services:
       - sftpgo_uploads:/var/nabs/sftpgo_uploads
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on: [nabs-redis]
+    depends_on:
+      nabs-redis: { condition: service_healthy }
 
   celery-beat:
     build: { context: ./backend, dockerfile: Dockerfile }
     container_name: celery-beat
+    restart: unless-stopped
     command: celery -A app.workers.celery_app beat --loglevel=info
     env_file: .env
-    depends_on: [nabs-redis]
+    depends_on:
+      nabs-redis: { condition: service_healthy }
 
   nabs-dashboard:
     build: { context: ./frontend, dockerfile: Dockerfile }
     container_name: nabs-dashboard
-    ports: ["5173:80"]
+    restart: unless-stopped
+    ports: ["127.0.0.1:5173:80"]      # dışarıya Caddy (443) üzerinden çıkılır
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     depends_on: [nabs-core-api]
 
   sftpgo:
     image: drakkan/sftpgo:v2.5-alpine
     container_name: sftpgo-gateway
-    ports: ["2022:2022", "8080:8080"]
+    restart: unless-stopped
+    ports: ["2022:2022", "127.0.0.1:8080:8080"]   # 2022 (SFTP girişi) ağa açık, 8080 (yönetim) yalnızca host içi
     env_file: .env
     volumes:
       - sftpgo_data:/var/lib/sftpgo

@@ -74,10 +74,14 @@ if [ "$OVERWRITE" = "1" ]; then
   # ---- 2) Alan adı / erişim ----
   DOMAIN=$(ask "GUI için alan adı (FQDN). Yalnızca yerel test için 'localhost'" "localhost")
 
+  # ---- Prod modu: localhost disi kurulumda sertlestirme overlay'i ----
+  if [ "$DOMAIN" != "localhost" ]; then PRODMODE=1; else PRODMODE=0; fi
+
   # ---- 3) Secret'lar ----
   if yesno "Secret'lar (master key, JWT, webhook, DB parolası) otomatik üretilsin mi?" "e"; then
     NABS_MASTER_KEY=$(gen); JWT_SECRET=$(gentok); SFTPGO_WEBHOOK_SECRET=$(gentok)
     POSTGRES_PASSWORD=$(gentok); GF_PASS=$(gentok)
+    [ "$PRODMODE" = "1" ] && REDIS_PASSWORD=$(gentok)
     ok "Secret'lar üretildi"
   else
     NABS_MASTER_KEY=$(ask "NABS_MASTER_KEY (44 karakter base64)" "$(gen)")
@@ -85,6 +89,7 @@ if [ "$OVERWRITE" = "1" ]; then
     SFTPGO_WEBHOOK_SECRET=$(ask "SFTPGO_WEBHOOK_SECRET" "$(gentok)")
     POSTGRES_PASSWORD=$(ask "PostgreSQL parolası" "$(gentok)")
     GF_PASS=$(gentok)
+    [ "$PRODMODE" = "1" ] && REDIS_PASSWORD=$(ask "Redis parolası" "$(gentok)")
   fi
 
   # ---- 4) Secret backend ----
@@ -121,7 +126,12 @@ if [ "$OVERWRITE" = "1" ]; then
     echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
     echo "POSTGRES_DB=nabs_governance"
     echo "DATABASE_URL=postgresql://nabs_admin:${POSTGRES_PASSWORD}@nabs-db:5432/nabs_governance"
-    echo "REDIS_URL=redis://nabs-redis:6379/0"
+    if [ "$PRODMODE" = "1" ]; then
+      echo "REDIS_PASSWORD=${REDIS_PASSWORD}"
+      echo "REDIS_URL=redis://:${REDIS_PASSWORD}@nabs-redis:6379/0"
+    else
+      echo "REDIS_URL=redis://nabs-redis:6379/0"
+    fi
     echo "JWT_EXPIRE_MINUTES=60"
     echo "CORS_ORIGINS=${CORS}"
     echo "NABS_GIT_REPO_PATH=/var/nabs/git_repo"
@@ -150,6 +160,7 @@ if [ "$OVERWRITE" = "1" ]; then
   ok ".env oluşturuldu (0600)"
 
   # compose overlay'leri
+  [ "$PRODMODE" = "1" ] && COMPOSE_FILES+=(-f docker-compose.prod.yml)
   [ "${TLS:-1}" = "2" ] && COMPOSE_FILES+=(-f docker-compose.tls.yml)
   [ "${OBS:-0}" = "1" ]  && COMPOSE_FILES+=(-f docker-compose.observability.yml)
   [ "$USE_VAULT" = "1" ] && COMPOSE_FILES+=(-f docker-compose.vault.yml)
@@ -157,6 +168,7 @@ if [ "$OVERWRITE" = "1" ]; then
   export NABS_MASTER_KEY JWT_SECRET SFTPGO_WEBHOOK_SECRET
 else
   # mevcut .env; vault kullanılıyor mu tahmin et
+  grep -q '^REDIS_PASSWORD=' .env && COMPOSE_FILES+=(-f docker-compose.prod.yml)
   grep -q '^VAULT_ADDR=' .env && { USE_VAULT=1; COMPOSE_FILES+=(-f docker-compose.vault.yml); }
   grep -q '^NABS_DOMAIN=' .env && [ -f docker-compose.tls.yml ] && \
     yesno "TLS (Caddy) overlay'i kullanılsın mı?" "e" && COMPOSE_FILES+=(-f docker-compose.tls.yml)
@@ -203,6 +215,37 @@ else
   warn "Admin oluşturulamadı (belki zaten var). Elle: $DC exec nabs-core-api python -m app.cli create-admin <kullanıcı> <parola>"
 fi
 
+# ---- 11b) Config deposu host dışı aynası (Spec 12.1 — kritik) ----
+echo; say "Config deposunun host dışı aynası"
+echo "  ${D}Config geçmişi tek kopyadır. Bir 'mirror' Git remote'u tanımlamazsanız${N}"
+echo "  ${D}15 dakikalık ayna görevi sessizce atlanır ve host dışı yedek oluşmaz.${N}"
+MIRROR_URL=$(ask "Ayna Git remote URL'si (boş → şimdilik atla)" "")
+if [ -n "$MIRROR_URL" ]; then
+  if $DC "${COMPOSE_FILES[@]}" exec -T nabs-core-api python -m app.cli set-mirror "$MIRROR_URL"; then
+    ok "Ayna remote'u ayarlandı"
+  else
+    warn "Ayna remote'u ayarlanamadı. Elle: $DC exec nabs-core-api python -m app.cli set-mirror <url>"
+  fi
+else
+  warn "Ayna tanımlanmadı — config geçmişinin host dışı kopyası YOK."
+  warn "Sonra eklemek için: $DC exec nabs-core-api python -m app.cli set-mirror <url>"
+fi
+
+# ---- 11c) PostgreSQL yedeği için cron ----
+echo; say "PostgreSQL yedekleme zamanlaması"
+CRON_LINE="30 2 * * * mkdir -p /var/nabs/db_backups && $(pwd)/scripts/backup_db.sh >> /var/nabs/db_backups/backup.log 2>&1"
+if crontab -l 2>/dev/null | grep -Fq "$(pwd)/scripts/backup_db.sh"; then
+  ok "Yedek cron kaydı zaten var"
+elif yesno "Her gece 02:30'da pg_dump alan cron kaydı eklensin mi?" "e"; then
+  if { crontab -l 2>/dev/null; echo "$CRON_LINE"; } | crontab -; then
+    ok "Cron eklendi (02:30, saklama: DB_BACKUP_RETENTION_DAYS gün)"
+  else
+    warn "Cron eklenemedi. Elle ekleyin:"; echo "    $CRON_LINE"
+  fi
+else
+  warn "Yedek zamanlaması kurulmadı. Elle eklemek için:"; echo "    $CRON_LINE"
+fi
+
 # ---- 12) Özet ----
 URL="http://localhost:5173"
 [ "${TLS:-1}" = "2" ] && URL="https://${DOMAIN}"
@@ -217,5 +260,7 @@ if [ "$USE_VAULT" = "1" ]; then
   echo "  ${Y}Vault:${N} unseal anahtarı + token → ${B}vault-init.secret${N} (GÜVENLE SAKLAYIN, sunucudan taşıyın)."
   echo "         Her restart'ta: ${B}./scripts/vault_unseal.sh${N}"
 fi
+[ "${PRODMODE:-0}" = "1" ] && echo "  ${B}Sertleştirme:${N} docker-compose.prod.yml etkin (Redis parolalı, log rotasyonu, portlar 127.0.0.1'e bağlı)"
+[ -z "${MIRROR_URL:-}" ] && echo "  ${Y}Açık madde:${N} config deposu aynası tanımlı değil."
 echo "  ${D}Detaylı işletim: docs/PRODUCTION_INSTALL.md${N}"
 echo

@@ -100,3 +100,30 @@ def ldap_test(payload: LdapTest, _admin: dict = Depends(require_role("admin"))):
         return {"ok": ok, "reason": reason, "server": url}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "reason": f"LDAP sunucusuna erişilemedi: {exc}", "server": url}
+
+
+@router.get("/system/mirror-status")
+def mirror_status(_admin: dict = Depends(require_role("admin"))):
+    """Config deposunun host dışı aynası (Spec 12.1) yapılandırılmış mı.
+
+    'mirror' remote tanımlı değilse `mirror_git_repository` görevi her
+    çalışmada sessizce atlanır; bu durumda config geçmişinin tek kopyası
+    kalır. Uç, URL'yi kimlik bilgisi sızdırmayacak biçimde maskeler.
+    """
+    from app.services.git_engine import get_git_engine
+
+    try:
+        repo = get_git_engine().repo
+        remote = next((r for r in repo.remotes if r.name == "mirror"), None)
+    except Exception as exc:  # depo henüz oluşmamış olabilir
+        return {"configured": False, "url": None, "detail": str(exc)}
+
+    if remote is None:
+        return {"configured": False, "url": None,
+                "detail": "'mirror' remote tanımlı değil — host dışı kopya alınmıyor."}
+
+    url = list(remote.urls)[0]
+    if "@" in url:  # https://user:token@host/... -> kimlik bilgisini gizle
+        scheme, _, rest = url.partition("://")
+        url = f"{scheme}://***@{rest.split('@', 1)[1]}" if rest else "***"
+    return {"configured": True, "url": url, "detail": None}

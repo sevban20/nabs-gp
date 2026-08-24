@@ -54,8 +54,10 @@ Sihirbazın sorduğu başlıklar: alan adı (FQDN/localhost), secret otomatik ü
 cp .env.example .env
 python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"   # NABS_MASTER_KEY
 # .env içindeki zorunlu alanları doldur (Bölüm 4)
-docker compose up -d --build
+# Üretimde sertleştirme overlay'i ile (Bölüm 6.4):
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 docker exec -it nabs-api python -m app.cli create-admin admin '<güçlü-parola>'
+docker exec -it nabs-api python -m app.cli set-mirror <ayna-git-url>   # Bölüm 9
 curl -s http://localhost:8000/health
 ```
 
@@ -162,9 +164,22 @@ Her iki durumda doğrulama: **GUI → Ayarlar → Sistem → Secret Kaynağı** 
 
 ### 6.3 Diğer
 - Konteynerler zaten **non-root** (`appuser`, uid 10001) çalışır.
-- Postgres/Redis portlarını (5432/6379) dış dünyaya kapatın (yalnızca iç ağ).
+- Port yayınları artık `docker-compose.yml`'de **127.0.0.1'e bağlıdır** (5432, 6379, 8000, 5173, SFTPGo 8080). Dışarıya yalnızca Caddy'nin 80/443'ü ve yönetilen cihazların kullandığı SFTPGo 2022 açıktır. Uzaktan erişim için TLS (Bölüm 6.1) şarttır.
 - Güçlü, benzersiz parolalar; `create-admin` sonrası varsayılan hesap yok.
 - MFA'yı kritik hesaplar için etkinleştirin (GUI → Ayarlar/Yönetim → MFA).
+
+### 6.4 Sertleştirme overlay'i (`docker-compose.prod.yml`)
+`install.sh`, alan adı `localhost` değilse bu overlay'i otomatik ekler. Manuel kurulumda siz ekleyin:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+               -f docker-compose.tls.yml up -d
+```
+Overlay'in yaptıkları:
+- **Redis parolası zorunlu.** `.env`'de `REDIS_PASSWORD` ve buna uygun `REDIS_URL=redis://:<parola>@nabs-redis:6379/0` olmalıdır; yoksa compose hata verip durur (fail closed).
+- **Log rotasyonu** (json-file, 20 MB × 5) — diskin log ile dolmasını engeller.
+- **Konteyner bellek tavanları.**
+
+Ana compose dosyasında ayrıca tüm servisler `restart: unless-stopped` ile çalışır (sunucu yeniden başladığında stack kendiliğinden ayağa kalkar) ve API/dashboard'ın healthcheck'i vardır.
 
 ---
 
@@ -181,6 +196,10 @@ GUI → Ayarlar → **Sistem Durumu & Testler** ve genel akış:
 - [ ] **Keşif** (tarama / L2 topla) ve **Ağ Haritası** çalışıyor.
 - [ ] (AI kullanılacaksa) Chat sekmesinde LLM durumu yeşil.
 - [ ] Grafana (opsiyonel) dashboard'ları veri gösteriyor.
+- [ ] **Config aynası:** `GET /api/v1/system/mirror-status` → `configured: true` (Bölüm 9).
+- [ ] **DB yedeği:** `crontab -l` içinde `backup_db.sh` satırı var; ilk yedek `/var/nabs/db_backups` altında oluştu.
+- [ ] **Restart provası:** `sudo reboot` sonrası tüm konteynerler kendiliğinden ayağa kalktı.
+- [ ] **Gerçek istemci IP:** birkaç hatalı girişten sonra audit kaydındaki `source_ip` proxy'nin değil, istemcinin IP'si.
 
 ---
 
@@ -197,8 +216,17 @@ docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
 
 ## 9. Yedekleme & Felaket Kurtarma (DR)
 
-- **Config deposu (kritik):** `git_repository_storage` her cihazın konfigürasyon geçmişinin tek kopyasıdır. `celery-beat` 15 dakikada bir `mirror` remote'una push eder — repoya bir `mirror` remote tanımlayın (iç Git sunucusu / object storage).
-- **PostgreSQL:** `scripts/backup_db.sh` (pg_dump -Fc) — cron ile çalıştırın; `DB_BACKUP_RETENTION_DAYS` kadar saklar. Yedekte de parolalar uygulama katmanında şifreli kalır.
+- **Config deposu (kritik):** `git_repository_storage` her cihazın konfigürasyon geçmişinin tek kopyasıdır. `celery-beat` 15 dakikada bir `mirror` remote'una push eder. Ayna remote'unu kurulum sihirbazı sorar; sonradan eklemek/değiştirmek için:
+  ```bash
+  docker exec -it nabs-api python -m app.cli set-mirror https://git.sirket.local/nabs/configs.git
+  docker exec -it nabs-api python -m app.cli show-mirror     # doğrula
+  ```
+  Durumu GUI/API'den de görebilirsiniz: `GET /api/v1/system/mirror-status`. **Tanımlı değilse ayna görevi her çalışmada sessizce atlanır.**
+- **PostgreSQL:** `scripts/backup_db.sh` (pg_dump -Fc). Sihirbaz her gece 02:30 için cron kaydı önerir; script `.env`'i kendisi yükler. Elle eklemek isterseniz:
+  ```bash
+  30 2 * * * mkdir -p /var/nabs/db_backups && /opt/nabs/scripts/backup_db.sh >> /var/nabs/db_backups/backup.log 2>&1
+  ```
+  `DB_BACKUP_RETENTION_DAYS` kadar saklar. Yedekte de parolalar uygulama katmanında şifreli kalır.
 - **Veri saklama:** `DATA_RETENTION_DAYS` (GUI/Ayarlar) süresinden eski backup geçmişi ve çözülmüş bulgular günlük `purge_expired_records` göreviyle silinir.
 - **Geri yükleme provası:** Düzenli olarak pg dump'ı boş bir ortama geri yükleyip config mirror'ından repoyu klonlayarak DR tatbikatı yapın.
 
