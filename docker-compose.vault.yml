@@ -28,7 +28,13 @@ services:
   nabs-vault:
     image: hashicorp/vault:1.17
     container_name: nabs-vault
-    command: server -config=/vault/config/config.hcl
+    # DİKKAT: burada "-config=..." VERMEYİN. Resmî imajın entrypoint'i "server"
+    # argümanını görünce komutu şuna çevirir:
+    #     vault server -config=/vault/config ... "$@"
+    # Yani /vault/config dizinini zaten yükler. Ayrıca -config=/vault/config/config.hcl
+    # verilirse aynı dosya İKİ KEZ okunur, iki adet listener tanımlanır ve Vault
+    # "listen tcp4 0.0.0.0:8200: bind: address already in use" ile açılmaz.
+    command: server
     cap_add:
       - IPC_LOCK
     environment:
@@ -47,9 +53,10 @@ services:
       # 0 ve 2 "ayakta" sayılır (sealed Vault da ayaktadır, sadece kilitlidir).
       # NOT: $$ compose'un değişken interpolasyonundan kaçmak için gerekli.
       test: ["CMD-SHELL", "vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1; s=$$?; [ $$s -eq 0 ] || [ $$s -eq 2 ]"]
-      interval: 15s
+      interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 30s
 
   # API ve worker'lar Vault'a bağlanabilsin (aynı ağ). VAULT_* .env'den okunur.
   nabs-core-api:

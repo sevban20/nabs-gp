@@ -219,7 +219,7 @@ if [ "$USE_VAULT" = "1" ]; then
     if [ "$STATE" = "restarting" ] || [ "$STATE" = "exited" ]; then
       break
     fi
-    docker exec -e VAULT_ADDR=http://127.0.0.1:8200 nabs-vault vault status >/dev/null 2>&1
+    VS_OUT=$(docker exec -e VAULT_ADDR=http://127.0.0.1:8200 nabs-vault vault status 2>&1)
     rc=$?
     if [ "$rc" = "0" ] || [ "$rc" = "2" ]; then VAULT_READY=1; ok "Vault hazır"; break; fi
     sleep 2
@@ -227,20 +227,34 @@ if [ "$USE_VAULT" = "1" ]; then
 
   if [ "$VAULT_READY" != "1" ]; then
     echo
-    warn "Vault ayağa kalkmadı (durum: ${STATE:-bilinmiyor}). Konteyner logunun son 30 satırı:"
+    warn "Vault ayağa kalkmadı (durum: ${STATE:-bilinmiyor}, son 'vault status' çıkış kodu: ${rc:-?})."
+    if [ -n "${VS_OUT:-}" ]; then
+      warn "'vault status' çıktısı:"
+      echo "$VS_OUT" | sed 's/^/      /' | head -10
+    fi
+    warn "Konteyner logunun son 30 satırı:"
     echo "${D}------------------------------------------------------------${N}"
     docker logs --tail 30 nabs-vault 2>&1 | sed 's/^/    /'
     echo "${D}------------------------------------------------------------${N}"
     echo
-    warn "En sık sebep: raft veri dizininin (/vault/data) sahipliği. Vault konteyner"
-    warn "içinde 'vault' kullanıcısı (uid 100) olarak çalışır; yeni Docker volume'ü"
-    warn "root'a ait oluşturulursa raft dizinini açamaz. Düzeltme:"
-    VOL=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/vault/data"}}{{.Name}}{{end}}{{end}}' nabs-vault 2>/dev/null)
-    [ -z "$VOL" ] && VOL="<proje>_vault_data   # 'docker volume ls' ile bulun"
-    echo "    docker run --rm -v ${VOL}:/data alpine chown -R 100:1000 /data"
-    echo "    $DC ${COMPOSE_FILES[*]} up -d nabs-vault"
+    VLOG=$(docker logs --tail 60 nabs-vault 2>&1)
+    if echo "$VLOG" | grep -qi "permission denied"; then
+      warn "Sebep: raft veri dizininin (/vault/data) sahipliği. Vault konteyner içinde"
+      warn "root olmayan 'vault' kullanıcısı olarak çalışır; volume root'a ait ise yazamaz."
+      VOL=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/vault/data"}}{{.Name}}{{end}}{{end}}' nabs-vault 2>/dev/null)
+      [ -z "$VOL" ] && VOL="<proje>_vault_data   # 'docker volume ls' ile bulun"
+      echo "    docker run --rm -v ${VOL}:/data alpine chown -R vault:vault /data"
+    elif echo "$VLOG" | grep -qi "address already in use"; then
+      warn "Sebep: aynı yapılandırma iki kez yükleniyor, iki listener tanımlanıyor."
+      warn "docker-compose.vault.yml'de komut sadece 'server' olmalı; '-config=...'"
+      warn "EKLEMEYİN — imajın entrypoint'i /vault/config dizinini zaten yükler."
+    elif echo "$VLOG" | grep -qi "Error parsing config\|error loading configuration"; then
+      warn "Sebep: deploy/vault/config.hcl okunamıyor ya da sözdizimi hatalı."
+    else
+      warn "Yukarıdaki log satırlarına bakın; sebep orada yazıyor."
+    fi
     echo
-    warn "Sonra bu betiği tekrar çalıştırın (.env'i koruyarak)."
+    warn "Düzelttikten sonra bu betiği tekrar çalıştırın (.env'i koruyarak)."
     die "Vault hazır olmadan devam edilemez."
   fi
 
@@ -263,11 +277,25 @@ $DC "${COMPOSE_FILES[@]}" up -d --build
 
 # ---- 10) API sağlık bekle ----
 say "API sağlığı bekleniyor"
-for i in $(seq 1 30); do
-  if curl -fs http://localhost:8000/health >/dev/null 2>&1; then ok "API hazır"; break; fi
+API_READY=0
+for i in $(seq 1 45); do
+  if curl -fs http://localhost:8000/health >/dev/null 2>&1; then API_READY=1; ok "API hazır"; break; fi
   sleep 2
-  [ "$i" = "30" ] && warn "API 60 sn içinde yanıt vermedi; 'docker compose logs nabs-core-api' ile bakın."
 done
+
+if [ "$API_READY" != "1" ]; then
+  echo
+  warn "API 90 sn içinde yanıt vermedi. Konteyner durumları:"
+  $DC "${COMPOSE_FILES[@]}" ps 2>&1 | sed 's/^/    /'
+  echo
+  warn "nabs-core-api logunun son 25 satırı:"
+  echo "${D}------------------------------------------------------------${N}"
+  docker logs --tail 25 nabs-api 2>&1 | sed 's/^/    /'
+  echo "${D}------------------------------------------------------------${N}"
+  echo
+  warn "Tam teşhis için: ./scripts/diag_stack.sh"
+  die "API ayağa kalkmadan kurulum tamamlanmış sayılmaz."
+fi
 
 # ---- 11) Admin oluştur ----
 echo; say "İlk admin kullanıcısı"
