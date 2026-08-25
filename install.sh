@@ -224,7 +224,7 @@ fi
 # ---- 8) Vault ilk kurulum ----
 if [ "$USE_VAULT" = "1" ]; then
   echo; say "Gömülü Vault başlatılıyor"
-  $DC "${COMPOSE_FILES[@]}" up -d nabs-vault
+  $DC "${COMPOSE_FILES[@]}" up -d --remove-orphans nabs-vault
 
   # Vault gerçekten ayağa kalkana kadar bekle. 'vault status' çıkış kodları:
   # 0 = unsealed, 2 = sealed, 1 = erişilemiyor. 0/2 "hazır" demektir.
@@ -320,9 +320,66 @@ if [ "$USE_VAULT" = "1" ]; then
   fi
 fi
 
+# ---- 8b) Veritabanı parolasını .env ile eşitle ----
+# PostgreSQL, POSTGRES_PASSWORD'ü YALNIZCA ilk açılışta (veri dizini boşken)
+# uygular. Mevcut bir postgres_data volume'ü üzerine yeni bir .env ile kurulum
+# yapılırsa veritabanındaki parola eskisi kalır ve API şununla açılmaz:
+#   FATAL: password authentication failed for user "nabs_admin"
+# Burada .env'deki parolayla bağlanmayı deneyip, tutmazsa rol parolasını
+# .env'e eşitliyoruz — veriler (config geçmişi, envanter) korunur.
+PG_USER=$(grep -m1 '^POSTGRES_USER=' .env | cut -d= -f2-)
+PG_PASS=$(grep -m1 '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)
+PG_DB=$(grep -m1 '^POSTGRES_DB=' .env | cut -d= -f2-)
+
+echo; say "Veritabanı hazırlanıyor"
+$DC "${COMPOSE_FILES[@]}" up -d --remove-orphans nabs-db >/dev/null
+PG_READY=0
+for _ in $(seq 1 30); do
+  if docker exec nabs-postgres pg_isready -U "$PG_USER" -d "$PG_DB" >/dev/null 2>&1; then
+    PG_READY=1; break
+  fi
+  sleep 2
+done
+
+if [ "$PG_READY" != "1" ]; then
+  warn "PostgreSQL 60 sn içinde hazır olmadı; logu kontrol edin:"
+  docker logs --tail 20 nabs-postgres 2>&1 | sed 's/^/    /'
+  die "Veritabanı hazır olmadan devam edilemez."
+fi
+
+if docker exec -e PGPASSWORD="$PG_PASS" nabs-postgres \
+     psql -h 127.0.0.1 -U "$PG_USER" -d "$PG_DB" -c 'select 1' >/dev/null 2>&1; then
+  ok "Veritabanı parolası .env ile uyumlu"
+else
+  warn "Mevcut veritabanının parolası .env ile uyuşmuyor (eski kurulumdan kalan volume)."
+  # Unix soketi üzerinden bağlantı 'trust' olduğu için parola gerekmez.
+  if docker exec nabs-postgres psql -U "$PG_USER" -d "$PG_DB" \
+       -c "ALTER USER \"$PG_USER\" WITH PASSWORD '$PG_PASS';" >/dev/null 2>&1; then
+    ok "Veritabanı parolası .env ile eşitlendi (veriler korundu)"
+  else
+    warn "Parola eşitlenemedi. Elle deneyin:"
+    echo "    docker exec -it nabs-postgres psql -U $PG_USER -d $PG_DB \\"
+    echo "      -c \"ALTER USER \\\"$PG_USER\\\" WITH PASSWORD '<.env icindeki POSTGRES_PASSWORD>';\""
+    warn "Ya da veritabanını sıfırlamak isterseniz (TÜM VERİ SİLİNİR):"
+    echo "    $DC ${COMPOSE_FILES[*]} down && docker volume rm nabs-gp_postgres_data"
+    die "Veritabanı kimlik doğrulaması düzeltilmeden devam edilemez."
+  fi
+fi
+
 # ---- 9) Stack'i başlat ----
+# Önceki denemelerden kalan konteynerler ad çakışmasına yol açar: bu projede
+# her servisin sabit bir container_name'i var, dolayısıyla farklı bir overlay
+# setiyle (ör. observability olmadan) yapılan eski bir kurulumun konteynerleri
+# "The container name ... is already in use" hatası verir. --remove-orphans
+# bunları temizler; ayrıca artık bu dosya setinde olmayan servisleri de kaldırır.
 echo; say "Stack derleniyor ve başlatılıyor (birkaç dakika sürebilir)"
-$DC "${COMPOSE_FILES[@]}" up -d --build
+if ! $DC "${COMPOSE_FILES[@]}" up -d --build --remove-orphans; then
+  echo
+  warn "Başlatma başarısız. Ad çakışması varsa kalan konteynerleri kaldırıp tekrar deneyin:"
+  echo "    $DC ${COMPOSE_FILES[*]} down --remove-orphans"
+  echo "    ./install.sh"
+  die "Stack başlatılamadı."
+fi
 
 # ---- 10) API sağlık bekle ----
 say "API sağlığı bekleniyor"
