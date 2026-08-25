@@ -82,16 +82,23 @@ if docker inspect nabs-postgres >/dev/null 2>&1; then
   PGU=$(grep -m1 '^POSTGRES_USER=' .env 2>/dev/null | cut -d= -f2-)
   PGP=$(grep -m1 '^POSTGRES_PASSWORD=' .env 2>/dev/null | cut -d= -f2-)
   PGD=$(grep -m1 '^POSTGRES_DB=' .env 2>/dev/null | cut -d= -f2-)
-  # DATABASE_URL içindeki parola POSTGRES_PASSWORD ile aynı olmalı
-  DBU_PASS=$(grep -m1 '^DATABASE_URL=' .env 2>/dev/null | sed -n 's|^DATABASE_URL=.*://[^:]*:\([^@]*\)@.*|\1|p')
   dupes=$(grep -c '^POSTGRES_PASSWORD=' .env 2>/dev/null || echo 0)
   [ "$dupes" -gt 1 ] && bad ".env içinde POSTGRES_PASSWORD $dupes kez tanımlı — sonuncusu geçerli olur, karışıklık kaynağı."
-  if [ -n "$DBU_PASS" ] && [ "$DBU_PASS" != "$PGP" ]; then
-    bad "DATABASE_URL içindeki parola POSTGRES_PASSWORD ile AYNI DEĞİL — API bağlanamaz."
+
+  # DATABASE_URL'i AYRIŞTIRMA, KULLAN. Bağlantı dizesini regex ile parçalayıp
+  # karşılaştırmak yanıltıcı: sürücü öneki (postgresql+psycopg2://), yüzde
+  # kodlaması ve özel karakterler yanlış sonuç verir. Tek doğru test, API'nin
+  # kendi ortamındaki DATABASE_URL ile gerçekten bağlanmayı denemektir.
+  if docker inspect nabs-api >/dev/null 2>&1; then
+    if docker exec nabs-api python -c "import os,psycopg2;psycopg2.connect(os.environ['DATABASE_URL']).close()" >/dev/null 2>&1; then
+      ok "API, DATABASE_URL ile veritabanına bağlanabiliyor"
+    else
+      bad "API DATABASE_URL ile BAĞLANAMIYOR — .env'deki bağlantı dizesi hatalı ya da parola uyuşmuyor"
+    fi
   else
-    ok "DATABASE_URL ve POSTGRES_PASSWORD tutarlı"
+    warn "nabs-api konteyneri yok; DATABASE_URL testi atlandı"
   fi
-  if docker exec -e PGPASSWORD="$PGP" nabs-postgres        psql -h 127.0.0.1 -U "$PGU" -d "$PGD" -c 'select 1' >/dev/null 2>&1; then
+  if docker exec -e PGPASSWORD="$PGP" nabs-postgres        psql -h nabs-db -U "$PGU" -d "$PGD" -c 'select 1' >/dev/null 2>&1; then
     ok "veritabanı .env parolasıyla bağlantıyı kabul ediyor"
   else
     bad "veritabanı .env parolasını REDDEDİYOR (volume eski kurulumdan kalmış olabilir)"

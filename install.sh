@@ -347,15 +347,22 @@ if [ "$PG_READY" != "1" ]; then
   die "Veritabanı hazır olmadan devam edilemez."
 fi
 
+# DİKKAT: doğrulama 127.0.0.1 ÜZERİNDEN YAPILMAZ. PostgreSQL imajının
+# pg_hba.conf'unda loopback 'trust'tur; oradan yapılan bağlantı parolaya
+# bakılmadan kabul edilir ve kontrol yanlışlıkla "uyumlu" der. API başka bir
+# konteynerden 'nabs-db:5432'ye bağlanır ve orada 'scram-sha-256' işler —
+# doğrulama da aynı yoldan yapılmalı.
 if docker exec -e PGPASSWORD="$PG_PASS" nabs-postgres \
-     psql -h 127.0.0.1 -U "$PG_USER" -d "$PG_DB" -c 'select 1' >/dev/null 2>&1; then
+     psql -h nabs-db -U "$PG_USER" -d "$PG_DB" -c 'select 1' >/dev/null 2>&1; then
   ok "Veritabanı parolası .env ile uyumlu"
 else
   warn "Mevcut veritabanının parolası .env ile uyuşmuyor (eski kurulumdan kalan volume)."
   # Unix soketi üzerinden bağlantı 'trust' olduğu için parola gerekmez.
   if docker exec nabs-postgres psql -U "$PG_USER" -d "$PG_DB" \
-       -c "ALTER USER \"$PG_USER\" WITH PASSWORD '$PG_PASS';" >/dev/null 2>&1; then
-    ok "Veritabanı parolası .env ile eşitlendi (veriler korundu)"
+       -c "ALTER USER \"$PG_USER\" WITH PASSWORD '$PG_PASS';" >/dev/null 2>&1 \
+     && docker exec -e PGPASSWORD="$PG_PASS" nabs-postgres \
+          psql -h nabs-db -U "$PG_USER" -d "$PG_DB" -c 'select 1' >/dev/null 2>&1; then
+    ok "Veritabanı parolası .env ile eşitlendi ve doğrulandı (veriler korundu)"
   else
     warn "Parola eşitlenemedi. Elle deneyin:"
     echo "    docker exec -it nabs-postgres psql -U $PG_USER -d $PG_DB \\"
