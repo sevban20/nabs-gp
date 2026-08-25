@@ -77,7 +77,32 @@ if docker inspect nabs-redis >/dev/null 2>&1; then
   fi
 fi
 
-say "8) Vault durumu"
+say "8) Veritabanı kimlik doğrulaması"
+if docker inspect nabs-postgres >/dev/null 2>&1; then
+  PGU=$(grep -m1 '^POSTGRES_USER=' .env 2>/dev/null | cut -d= -f2-)
+  PGP=$(grep -m1 '^POSTGRES_PASSWORD=' .env 2>/dev/null | cut -d= -f2-)
+  PGD=$(grep -m1 '^POSTGRES_DB=' .env 2>/dev/null | cut -d= -f2-)
+  # DATABASE_URL içindeki parola POSTGRES_PASSWORD ile aynı olmalı
+  DBU_PASS=$(grep -m1 '^DATABASE_URL=' .env 2>/dev/null | sed -n 's|^DATABASE_URL=.*://[^:]*:\([^@]*\)@.*|\1|p')
+  dupes=$(grep -c '^POSTGRES_PASSWORD=' .env 2>/dev/null || echo 0)
+  [ "$dupes" -gt 1 ] && bad ".env içinde POSTGRES_PASSWORD $dupes kez tanımlı — sonuncusu geçerli olur, karışıklık kaynağı."
+  if [ -n "$DBU_PASS" ] && [ "$DBU_PASS" != "$PGP" ]; then
+    bad "DATABASE_URL içindeki parola POSTGRES_PASSWORD ile AYNI DEĞİL — API bağlanamaz."
+  else
+    ok "DATABASE_URL ve POSTGRES_PASSWORD tutarlı"
+  fi
+  if docker exec -e PGPASSWORD="$PGP" nabs-postgres        psql -h 127.0.0.1 -U "$PGU" -d "$PGD" -c 'select 1' >/dev/null 2>&1; then
+    ok "veritabanı .env parolasıyla bağlantıyı kabul ediyor"
+  else
+    bad "veritabanı .env parolasını REDDEDİYOR (volume eski kurulumdan kalmış olabilir)"
+    warn "Düzeltme (veriler korunur):"
+    echo "    docker exec nabs-postgres psql -U $PGU -d $PGD \\"
+    echo "      -c \"ALTER USER \\\"$PGU\\\" WITH PASSWORD '<POSTGRES_PASSWORD>';\""
+    echo "    docker restart nabs-api celery-worker-high celery-beat"
+  fi
+fi
+
+say "9) Vault durumu"
 if docker inspect nabs-vault >/dev/null 2>&1; then
   vs=$(docker exec -e VAULT_ADDR=http://127.0.0.1:8200 nabs-vault vault status 2>&1); rc=$?
   case $rc in
@@ -88,7 +113,7 @@ if docker inspect nabs-vault >/dev/null 2>&1; then
   echo "$vs" | grep -iE "^(Initialized|Sealed|Storage Type|Version)" | sed 's/^/      /'
 fi
 
-say "9) .env anahtarları (değerler gösterilmez)"
+say "10) .env anahtarları (değerler gösterilmez)"
 for k in APP_ENV DATABASE_URL REDIS_URL REDIS_PASSWORD CORS_ORIGINS NABS_DOMAIN \
          VAULT_ADDR VAULT_TOKEN NABS_MASTER_KEY JWT_SECRET; do
   if grep -q "^$k=" .env 2>/dev/null; then
@@ -103,14 +128,14 @@ for k in APP_ENV DATABASE_URL REDIS_URL REDIS_PASSWORD CORS_ORIGINS NABS_DOMAIN 
   fi
 done
 
-say "10) Kullanılan compose dosyaları"
+say "11) Kullanılan compose dosyaları"
 ls -1 docker-compose*.yml | sed 's/^/    /'
 warn "Stack'i başlatırken hangi -f dosyalarını verdiğinizi de paylaşın."
 
 say "Özet ipuçları"
 echo "  · 2. adımda 'nabs-core-api:8000' ulaşılamıyorsa → API ayakta değil, 4. adımdaki loga bakın."
 echo "  · 2. adımda 'nabs-dashboard:80' ulaşılamıyorsa → frontend konteyneri çökmüş."
-echo "  · 8. adımda SEALED ise → API fail-closed açılmaz; unseal edin."
+echo "  · 9. adımda SEALED ise → API fail-closed açılmaz; unseal edin."
 echo "  · 6. adımda ACME/sertifika hatası varsa → iç alan adı (.local) için Caddyfile'da"
 echo "    'tls internal' satırını açın; Let's Encrypt iç alan adına sertifika veremez."
 echo
