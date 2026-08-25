@@ -16,7 +16,8 @@ def setup_db():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     for username, role in [("p45_viewer", "viewer"), ("p45_op", "operator"),
-                           ("p45_admin", "admin"), ("p45_mfa", "operator")]:
+                           ("p45_admin", "admin"), ("p45_mfa", "operator"),
+                           ("p45_mfa2", "operator")]:
         if not db.query(User).filter(User.username == username).first():
             db.add(User(username=username, password_hash=hash_password("Passw0rd!x"), role=role))
     db.commit()
@@ -122,3 +123,40 @@ def test_health_reports_metrics_flag():
     r = client.get("/health")
     assert r.status_code == 200
     assert "metrics" in r.json()
+
+
+def test_login_signals_mfa_requirement_to_client():
+    """MFA gerektiğinde istemcinin OTP alanını açabilmesi için 401 yanıtı
+    X-MFA-Required başlığını taşımalı ve detail mesajı korunmalı.
+
+    Regresyon koruması: arayüz sunucunun mesajını atıp sabit "parola hatalı"
+    gösteriyordu; OTP alanı hiç açılmıyor ve MFA'lı kullanıcı giremiyordu.
+    """
+    import pyotp
+    headers = _token("p45_mfa2")
+    creds = {"username": "p45_mfa2", "password": "Passw0rd!x"}
+
+    secret = client.post("/api/v1/auth/mfa/enroll", headers=headers).json()["secret"]
+    client.post("/api/v1/auth/mfa/activate", headers=headers,
+                data={"otp": pyotp.TOTP(secret).now()})
+
+    r = client.post("/api/v1/auth/token", data=creds)
+    assert r.status_code == 401
+    assert r.headers.get("X-MFA-Required") == "1"
+    assert "MFA" in r.json()["detail"]
+
+    # Yanlış parola MFA işareti TAŞIMAMALI (aksi hâlde istemci gereksiz OTP ister)
+    r2 = client.post("/api/v1/auth/token",
+                     data={"username": "p45_mfa2", "password": "yanlis"})
+    assert r2.status_code == 401
+    assert r2.headers.get("X-MFA-Required") is None
+
+
+def test_mfa_enroll_is_idempotent_while_pending():
+    """Beklemede kayıt varken enroll AYNI secret'ı döndürmeli.
+    Aksi hâlde kullanıcının okuttuğu QR sessizce geçersizleşir."""
+    headers = _token("p45_op")
+    first = client.post("/api/v1/auth/mfa/enroll", headers=headers).json()
+    second = client.post("/api/v1/auth/mfa/enroll", headers=headers).json()
+    assert first["secret"] == second["secret"]
+    assert second["status"] == "pending"

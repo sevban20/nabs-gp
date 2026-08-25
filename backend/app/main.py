@@ -66,6 +66,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Giriş akışında OTP alanının açılması bu başlığa bakar.
+    expose_headers=["X-MFA-Required"],
 )
 
 METRICS_ENABLED = setup_metrics(app)

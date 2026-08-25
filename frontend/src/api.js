@@ -42,7 +42,18 @@ export async function login(username, password, otp) {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(params),
   })
-  if (!res.ok) throw new Error('Kullanıcı adı veya parola hatalı.')
+  if (!res.ok) {
+    // Sunucunun gerçek mesajını taşı. Sabit metin döndürmek MFA ve
+    // hız-sınırı (429) durumlarını "parola hatalı" gibi gösteriyordu.
+    const body = await res.json().catch(() => ({}))
+    const detail = typeof body.detail === 'string' ? body.detail : null
+    const err = new Error(detail || (res.status === 429
+      ? 'Çok fazla giriş denemesi. Birkaç dakika sonra tekrar deneyin.'
+      : 'Kullanıcı adı veya parola hatalı.'))
+    err.status = res.status
+    err.mfaRequired = res.headers.get('X-MFA-Required') === '1' || /mfa/i.test(detail || '')
+    throw err
+  }
   const data = await res.json()
   _token = data.access_token
   return data

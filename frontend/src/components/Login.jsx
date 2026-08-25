@@ -14,7 +14,7 @@ export default function Login({ onLogin }) {
     setBusy(true); setError(null)
     try { await login(username, password, otp || undefined); onLogin() }
     catch (err) {
-      if (err.message.includes('MFA')) setShowOtp(true)
+      if (err.mfaRequired) setShowOtp(true)
       setError(err.message)
     }
     finally { setBusy(false) }

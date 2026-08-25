@@ -51,8 +51,12 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     # 1) Lokal doğrulama
     if user and user.is_active and verify_password(password, user.password_hash):
         if not _verify_totp(user, otp):
+            # Arayüzün OTP alanını açabilmesi için makine-okunur işaret.
+            # Mesaj metnine göre karar vermek kırılgan: metin çevrilir/değişir
+            # ve istemci sessizce OTP istemeyi bırakır (yaşanmış kilitlenme).
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                                detail="MFA kodu gerekli veya geçersiz.")
+                                detail="MFA kodu gerekli veya geçersiz.",
+                                headers={"X-MFA-Required": "1"})
         return Token(access_token=create_access_token(user.username, user.role))
 
     # 2) Opsiyonel LDAP katmanı (Faz-1 JWT temeli üzerine; Spec Bölüm 7)
@@ -111,9 +115,15 @@ def enroll_mfa(current: dict = Depends(get_current_user), db: Session = Depends(
     if user.mfa_secret_encrypted:
         raise HTTPException(status_code=409, detail="MFA bu hesapta zaten aktif.")
 
-    secret = pyotp.random_base32()
-    user.mfa_pending_secret_encrypted = get_crypto_or_http().encrypt(secret)
-    db.commit()
+    # Beklemede bir kayıt varsa AYNI secret'ı döndür. Her tıklamada yeni secret
+    # üretmek, kullanıcının az önce okuttuğu QR'ı sessizce geçersiz kılıyor ve
+    # "kod doğrulanamadı" hatasına yol açıyordu.
+    if user.mfa_pending_secret_encrypted:
+        secret = get_crypto().decrypt(user.mfa_pending_secret_encrypted)
+    else:
+        secret = pyotp.random_base32()
+        user.mfa_pending_secret_encrypted = get_crypto_or_http().encrypt(secret)
+        db.commit()
     uri = pyotp.TOTP(secret).provisioning_uri(name=user.username, issuer_name="NABS-GP")
     return {
         "otpauth_uri": uri,

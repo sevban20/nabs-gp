@@ -35,5 +35,7 @@ volumes:
   caddy_data:
   caddy_config:
   tls_certs:
+    # Ad SABİTLENMEZ: proje adını takip eder (nabs-gp_tls_certs). Eskiden
+    # "networkbackuptool_tls_certs" olarak sabitliydi; proje adı değişince
+    # GUI'den yüklenen sertifika ile Caddy'nin okuduğu volume ayrışıyordu.
     external: false
-    name: networkbackuptool_tls_certs   # ana stack'teki tls_certs ile aynı volume
