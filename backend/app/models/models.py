@@ -125,7 +125,10 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="viewer")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    mfa_secret_encrypted: Mapped[str | None] = mapped_column(Text)  # Faz 5: TOTP MFA
+    mfa_secret_encrypted: Mapped[str | None] = mapped_column(Text)  # Faz 5: TOTP MFA (AKTİF)
+    # Kayıt sırasında üretilen ama henüz doğrulanmamış secret. MFA yalnızca
+    # kullanıcı geçerli bir kod girip aktifleştirdiğinde zorunlu olur.
+    mfa_pending_secret_encrypted: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

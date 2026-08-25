@@ -16,6 +16,9 @@ logger = logging.getLogger("nabs.migrations")
 # (tablo, kolon, SQL tip tanımı) — hem SQLite hem Postgres'te geçerli
 _COLUMN_ADDITIONS: list[tuple[str, str, str]] = [
     ("users", "mfa_secret_encrypted", "TEXT"),
+    # Doğrulanmamış (henüz aktifleşmemiş) TOTP secret'ı — kullanıcı bir kod
+    # üretebildiğini kanıtlayana kadar MFA zorunlu olmaz, kilitlenme yaşanmaz.
+    ("users", "mfa_pending_secret_encrypted", "TEXT"),
     ("remediation_actions", "requested_by", "VARCHAR(128)"),
     ("assets", "is_reachable", "BOOLEAN"),
     ("assets", "last_reachability_check_at", "TIMESTAMP"),

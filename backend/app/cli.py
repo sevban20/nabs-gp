@@ -4,6 +4,7 @@ Usage:
     python -m app.cli create-admin <username> <password>
     python -m app.cli set-mirror <git-remote-url>     # off-host config aynası
     python -m app.cli show-mirror
+    python -m app.cli reset-mfa <username>            # MFA kilitlenmesini aç
 """
 import sys
 
@@ -22,6 +23,24 @@ def create_admin(username: str, password: str) -> None:
         db.add(User(username=username, password_hash=hash_password(password), role="admin"))
         db.commit()
         print(f"Admin user '{username}' created.")
+    finally:
+        db.close()
+
+
+def reset_mfa(username: str) -> None:
+    """Bir kullanıcının TOTP kaydını siler. Tüm adminler MFA yüzünden
+    kilitlendiğinde tek kurtarma yolu budur (API'ye giriş gerektirmez)."""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            print(f"Kullanici '{username}' bulunamadi.")
+            sys.exit(1)
+        had = bool(user.mfa_secret_encrypted or user.mfa_pending_secret_encrypted)
+        user.mfa_secret_encrypted = None
+        user.mfa_pending_secret_encrypted = None
+        db.commit()
+        print(f"'{username}' icin MFA {'sifirlandi' if had else 'zaten tanimli degildi'}.")
     finally:
         db.close()
 
@@ -59,6 +78,8 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "create-admin" and len(sys.argv) == 4:
         create_admin(sys.argv[2], sys.argv[3])
+    elif cmd == "reset-mfa" and len(sys.argv) == 3:
+        reset_mfa(sys.argv[2])
     elif cmd == "set-mirror" and len(sys.argv) == 3:
         set_mirror(sys.argv[2])
     elif cmd == "show-mirror" and len(sys.argv) == 2:

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  createCredential, createUser, deleteCredential, deleteUser, enrollMfa,
+  createCredential, createUser, deleteCredential, deleteUser, activateMfa, enrollMfa,
   getCredentials, getUsers, hasRole, indexBenchmark, patchUser, resetUserPassword,
 } from '../api.js'
 
@@ -150,23 +150,80 @@ function Users() {
 }
 
 function Mfa() {
-  const [uri, setUri] = useState(null)
+  // İki adımlı kayıt: enroll (bekleyen secret) → activate (kod doğrulanınca aktif).
+  // Doğrulanana kadar giriş akışı değişmez; yanlış giden bir kayıt hesabı kilitlemez.
+  const [pending, setPending] = useState(null)   // {otpauth_uri, secret, secret_grouped, qr_svg}
+  const [otp, setOtp] = useState('')
+  const [active, setActive] = useState(false)
   const [error, setError] = useState(null)
+  const [busy, setBusy] = useState(false)
+
   const enroll = async () => {
-    if (!confirm('Hesabınızda TOTP MFA etkinleştirilsin mi? Sonraki girişlerde OTP kodu zorunlu olur.')) return
-    try { setUri((await enrollMfa()).otpauth_uri) } catch (e) { setError(e.message) }
+    setError(null); setBusy(true)
+    try { setPending(await enrollMfa()) } catch (e) { setError(e.message) }
+    finally { setBusy(false) }
   }
+
+  const activate = async (e) => {
+    e.preventDefault(); setError(null); setBusy(true)
+    try { await activateMfa(otp); setActive(true); setPending(null); setOtp('') }
+    catch (e2) { setError(e2.message) }
+    finally { setBusy(false) }
+  }
+
   return (
     <div className="panel-form">
       <h3>MFA (TOTP)</h3>
       {error && <div className="error">{error}</div>}
-      {uri ? (
+
+      {active && <div className="info">MFA etkinleştirildi. Sonraki girişlerde 6 haneli kod istenecek.</div>}
+
+      {!pending && !active &&
+        <button onClick={enroll} disabled={busy}>
+          {busy ? 'Hazırlanıyor…' : 'Hesabımda MFA Kur'}
+        </button>}
+
+      {pending && (
         <>
-          <div className="info">MFA etkinleştirildi. Bu URI'yi authenticator uygulamanıza ekleyin
-            (bir daha gösterilmez):</div>
-          <pre>{uri}</pre>
+          <div className="info">
+            <b>1. adım:</b> QR'ı authenticator uygulamanızla okutun. Okutamıyorsanız
+            uygulamada "kurulum anahtarını gir" seçeneğini kullanıp aşağıdaki
+            <b> secret</b>'ı yazın — <u>uzun otpauth:// bağlantısını değil</u>.
+          </div>
+
+          {pending.qr_svg
+            ? <div className="qr-box" style={{ background: '#fff', padding: 12, width: 'fit-content', borderRadius: 8 }}
+                dangerouslySetInnerHTML={{ __html: pending.qr_svg }} />
+            : <div className="hint">QR üretilemedi; aşağıdaki secret'ı elle girin.</div>}
+
+          <div className="detail-grid" style={{ marginTop: 12 }}>
+            <div><span className="muted">Secret:</span>{' '}
+              <code style={{ fontSize: '1.05em', letterSpacing: '0.08em' }}>
+                {pending.secret_grouped || pending.secret}
+              </code></div>
+            <div><span className="muted">Hesap:</span> NABS-GP</div>
+          </div>
+
+          <details style={{ marginTop: 8 }}>
+            <summary className="muted">otpauth:// bağlantısı (elle kurulum için gerekmez)</summary>
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{pending.otpauth_uri}</pre>
+          </details>
+
+          <form onSubmit={activate} style={{ marginTop: 12 }}>
+            <div className="info"><b>2. adım:</b> Uygulamadaki 6 haneli kodu girip doğrulayın.
+              Doğrulanmadan MFA <b>zorunlu olmaz</b>.</div>
+            <input placeholder="6 haneli kod" value={otp} maxLength={6} inputMode="numeric"
+              onChange={(ev) => setOtp(ev.target.value.replace(/\D/g, ''))} />
+            <div className="actions">
+              <button disabled={busy || otp.length !== 6}>
+                {busy ? 'Doğrulanıyor…' : 'Doğrula ve Etkinleştir'}
+              </button>
+              <button type="button" className="secondary"
+                onClick={() => { setPending(null); setOtp(''); setError(null) }}>Vazgeç</button>
+            </div>
+          </form>
         </>
-      ) : <button onClick={enroll}>Hesabımda MFA Etkinleştir</button>}
+      )}
     </div>
   )
 }

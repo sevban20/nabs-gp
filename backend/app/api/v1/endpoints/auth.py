@@ -70,19 +70,89 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
                         detail="Incorrect username or password")
 
 
+def _qr_svg(data: str) -> str | None:
+    """otpauth URI'sini QR olarak SVG döndürür. Kütüphane yoksa None —
+    arayüz o durumda secret'ı elle girilecek şekilde gösterir."""
+    try:
+        import io  # noqa: PLC0415
+
+        import qrcode  # noqa: PLC0415
+        import qrcode.image.svg  # noqa: PLC0415
+
+        img = qrcode.make(data, image_factory=qrcode.image.svg.SvgPathImage)
+        buf = io.BytesIO()
+        img.save(buf)
+        return buf.getvalue().decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @router.post("/auth/mfa/enroll")
 def enroll_mfa(current: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    """TOTP MFA kaydı: secret üretir, şifreli saklar, provisioning URI döner."""
+    """TOTP MFA kaydını BAŞLATIR — henüz zorunlu kılmaz.
+
+    Secret 'pending' olarak saklanır; kullanıcı /auth/mfa/activate ile geçerli
+    bir kod girene kadar giriş akışı değişmez. Aksi hâlde authenticator'a
+    ekleme adımı başarısız olduğunda hesap kilitlenir (yaşanmış bir vaka).
+    """
     import pyotp
     user = db.query(User).filter(User.username == current["sub"]).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
+    if user.mfa_secret_encrypted:
+        raise HTTPException(status_code=409, detail="MFA bu hesapta zaten aktif.")
+
     secret = pyotp.random_base32()
-    user.mfa_secret_encrypted = get_crypto_or_http().encrypt(secret)
+    user.mfa_pending_secret_encrypted = get_crypto_or_http().encrypt(secret)
     db.commit()
     uri = pyotp.TOTP(secret).provisioning_uri(name=user.username, issuer_name="NABS-GP")
-    return {"otpauth_uri": uri, "secret": secret,
-            "note": "Secret'ı authenticator uygulamanıza ekleyin; bir daha gösterilmez."}
+    return {
+        "otpauth_uri": uri,
+        "secret": secret,
+        # 4'erli gruplar: elle girişte okunabilir olsun
+        "secret_grouped": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)),
+        "qr_svg": _qr_svg(uri),
+        "status": "pending",
+        "note": ("QR'ı okutun ya da secret'ı elle girin, sonra uygulamadaki 6 haneli "
+                 "kodu doğrulayın. Doğrulanana kadar MFA zorunlu olmaz."),
+    }
+
+
+@router.post("/auth/mfa/activate")
+def activate_mfa(otp: str = Form(...), current: dict = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    """Bekleyen secret'ı doğrular ve MFA'yı aktifleştirir."""
+    import pyotp
+    user = db.query(User).filter(User.username == current["sub"]).first()
+    if not user or not user.mfa_pending_secret_encrypted:
+        raise HTTPException(status_code=400, detail="Bekleyen bir MFA kaydı yok.")
+
+    secret = get_crypto().decrypt(user.mfa_pending_secret_encrypted)
+    if not pyotp.TOTP(secret).verify(otp, valid_window=1):
+        raise HTTPException(status_code=400,
+                            detail="Kod doğrulanamadı. Saat senkronunu ve kodu kontrol edin.")
+
+    user.mfa_secret_encrypted = user.mfa_pending_secret_encrypted
+    user.mfa_pending_secret_encrypted = None
+    db.commit()
+    return {"status": "active", "detail": "MFA etkinleştirildi."}
+
+
+@router.post("/auth/mfa/disable")
+def disable_mfa(otp: str = Form(...), current: dict = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    """Kendi hesabında MFA'yı kapatır — geçerli bir kod ister."""
+    import pyotp
+    user = db.query(User).filter(User.username == current["sub"]).first()
+    if not user or not user.mfa_secret_encrypted:
+        raise HTTPException(status_code=400, detail="MFA bu hesapta aktif değil.")
+    secret = get_crypto().decrypt(user.mfa_secret_encrypted)
+    if not pyotp.TOTP(secret).verify(otp, valid_window=1):
+        raise HTTPException(status_code=400, detail="Kod doğrulanamadı.")
+    user.mfa_secret_encrypted = None
+    user.mfa_pending_secret_encrypted = None
+    db.commit()
+    return {"status": "disabled"}
 
 
 @router.post("/auth/users", status_code=201)

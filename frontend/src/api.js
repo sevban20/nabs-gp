@@ -79,6 +79,11 @@ export const getInstalledCert = () => request('/system/tls-certificate')
 export const uploadCert = (certificate, privateKey) =>
   request('/system/tls-certificate', { method: 'POST', ...json({ certificate, private_key: privateKey }) })
 export const enrollMfa = () => request('/auth/mfa/enroll', { method: 'POST' })
+export const activateMfa = (otp) => request('/auth/mfa/activate', {
+  method: 'POST', body: new URLSearchParams({ otp }) })
+export const disableMfa = (otp) => request('/auth/mfa/disable', {
+  method: 'POST', body: new URLSearchParams({ otp }) })
+export const resetUserMfa = (id) => request(`/users/${id}/mfa/reset`, { method: 'POST' })
 export const silenceAdvisory = (id) => request(`/advisories/${id}/silence`, { method: 'POST' })
 export const createRemediation = (data) => request('/remediations', { method: 'POST', ...json(data) })
 export const generateRemediation = (advisoryId) =>

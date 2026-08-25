@@ -39,6 +39,20 @@ def list_users(db: Session = Depends(get_db), _admin: dict = Depends(require_rol
     } for u in rows]
 
 
+@router.post("/users/{user_id}/mfa/reset")
+def reset_user_mfa(user_id: int, db: Session = Depends(get_db),
+                   _admin: dict = Depends(require_role("admin"))):
+    """Bir kullanıcının MFA kaydını siler (kilitlenme kurtarma).
+    Tüm adminler kilitliyse: docker exec nabs-api python -m app.cli reset-mfa <kullanıcı>"""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı.")
+    user.mfa_secret_encrypted = None
+    user.mfa_pending_secret_encrypted = None
+    db.commit()
+    return {"status": "reset", "username": user.username}
+
+
 @router.patch("/users/{user_id}")
 def update_user(user_id: int, payload: UserPatch, db: Session = Depends(get_db),
                 admin: dict = Depends(require_role("admin"))):

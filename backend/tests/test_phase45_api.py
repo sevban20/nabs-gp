@@ -1,4 +1,5 @@
 """Faz 2/4/5 API testleri: audit izi, MFA, keşif ucu, PDF ucu."""
+import re
 import pytest
 from fastapi.testclient import TestClient
 
@@ -48,21 +49,52 @@ def _count_audit() -> int:
     return n
 
 
-def test_mfa_enroll_and_enforce():
+def test_mfa_two_step_enrollment_does_not_lock_out():
+    """MFA kaydı İKİ ADIMLIDIR ve doğrulanana kadar zorunlu OLMAZ.
+
+    Regresyon koruması: eski davranışta enroll çağrısı MFA'yı anında zorunlu
+    kılıyordu. Kullanıcı secret'ı authenticator'a ekleyemezse (QR yok, secret
+    yanlış alana yapıştırıldı vb.) hesap kalıcı olarak kilitleniyordu.
+    """
     import pyotp
     headers = _token("p45_mfa")
+    creds = {"username": "p45_mfa", "password": "Passw0rd!x"}
+
+    # 1) Kayıt başlatılır: secret + QR döner, durum 'pending'
     r = client.post("/api/v1/auth/mfa/enroll", headers=headers)
     assert r.status_code == 200
-    secret = r.json()["secret"]
-    # OTP olmadan giriş reddedilir
-    r = client.post("/api/v1/auth/token",
-                    data={"username": "p45_mfa", "password": "Passw0rd!x"})
-    assert r.status_code == 401
-    # Doğru OTP ile giriş başarılı
+    body = r.json()
+    secret = body["secret"]
+    assert body["status"] == "pending"
+    assert len(secret) >= 16                      # authenticator'lar kısa secret'ı reddeder
+    assert re.fullmatch(r"[A-Z2-7]+=*", secret)   # geçerli base32
+    assert body["otpauth_uri"].startswith("otpauth://totp/")
+    assert body["secret_grouped"].replace(" ", "") == secret
+
+    # 2) KRİTİK: doğrulanmadan giriş HÂLÂ çalışır — kilitlenme yok
+    assert client.post("/api/v1/auth/token", data=creds).status_code == 200
+
+    # 3) Yanlış kod aktifleştirmez
+    assert client.post("/api/v1/auth/mfa/activate", headers=headers,
+                       data={"otp": "000000"}).status_code == 400
+    assert client.post("/api/v1/auth/token", data=creds).status_code == 200
+
+    # 4) Doğru kod ile aktifleşir
     otp = pyotp.TOTP(secret).now()
+    assert client.post("/api/v1/auth/mfa/activate", headers=headers,
+                       data={"otp": otp}).status_code == 200
+
+    # 5) Artık OTP zorunlu
+    assert client.post("/api/v1/auth/token", data=creds).status_code == 401
     r = client.post("/api/v1/auth/token",
-                    data={"username": "p45_mfa", "password": "Passw0rd!x", "otp": otp})
+                    data={**creds, "otp": pyotp.TOTP(secret).now()})
     assert r.status_code == 200
+
+    # 6) Geçerli kodla kapatılabilir; sonrasında OTP istenmez
+    h2 = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    assert client.post("/api/v1/auth/mfa/disable", headers=h2,
+                       data={"otp": pyotp.TOTP(secret).now()}).status_code == 200
+    assert client.post("/api/v1/auth/token", data=creds).status_code == 200
 
 
 def test_discovery_rejects_bad_and_huge_cidr():
