@@ -82,7 +82,16 @@ def _qr_svg(data: str) -> str | None:
         img = qrcode.make(data, image_factory=qrcode.image.svg.SvgPathImage)
         buf = io.BytesIO()
         img.save(buf)
-        return buf.getvalue().decode("utf-8")
+        svg = buf.getvalue().decode("utf-8")
+
+        import re as _re  # noqa: PLC0415
+        # 1) XML bildirimini at: HTML içine innerHTML ile gömülecek, orada
+        #    "<?xml ...?>" hatalı yorum olarak ayrıştırılır.
+        svg = _re.sub(r"^\s*<\?xml[^>]*\?>\s*", "", svg)
+        # 2) Fiziksel birimi (45mm) piksele çevir ki düzen öngörülebilir olsun.
+        svg = _re.sub(r'\swidth="[^"]*"', ' width="220"', svg, count=1)
+        svg = _re.sub(r'\sheight="[^"]*"', ' height="220"', svg, count=1)
+        return svg.strip()
     except Exception:  # noqa: BLE001
         return None
 
